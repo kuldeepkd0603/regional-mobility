@@ -23,6 +23,20 @@ from app.api.routes.auth import get_current_user, require_roles
 
 from app.models import Driver
 from app.schemas import DriverRegistrationCreate
+from datetime import datetime, timezone
+from app.models import AgencyBookingOffer, AgencyOfferStatus
+from app.schemas import AgencyOfferResponse
+from app.schemas import AgencyOfferRespond
+from app.core.notifications import create_notification
+from app.models import (
+    Booking,
+    BookingStatus,
+    Vehicle,
+)
+
+from app.schemas import BookingAssignment
+
+from app.api.routes.bookings import check_schedule_conflicts
 router = APIRouter(
     prefix="/agencies",
     tags=["Agency Management"]
@@ -371,3 +385,325 @@ def get_agency_dashboard(
             "currency": "INR"
         }
     }
+
+
+# =====================================
+# AGENCY VIEWS RECEIVED BOOKING OFFERS
+# =====================================
+
+@router.get(
+    "/offers",
+    response_model=list[AgencyOfferResponse]
+)
+def get_agency_offers(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.AGENCY)
+    )
+):
+    agency = db.query(Agency).filter(
+        Agency.user_id == current_user.id
+    ).first()
+
+    if not agency:
+        raise HTTPException(
+            404,
+            "Agency profile not found"
+        )
+
+    offers = (
+        db.query(AgencyBookingOffer)
+        .filter(
+            AgencyBookingOffer.agency_id == agency.id
+        )
+        .order_by(
+            AgencyBookingOffer.offered_at.desc()
+        )
+        .limit(100)
+        .all()
+    )
+
+    return offers
+
+
+# =====================================
+# AGENCY ACCEPTS OR REJECTS AN OFFER
+# =====================================
+
+@router.patch(
+    "/offers/{offer_id}/respond",
+    response_model=AgencyOfferResponse
+)
+def respond_to_agency_offer(
+    offer_id: int,
+    data: AgencyOfferRespond,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.AGENCY)
+    )
+):
+    # Find agency
+    agency = db.query(Agency).filter(
+        Agency.user_id == current_user.id
+    ).first()
+
+    if not agency:
+        raise HTTPException(404, "Agency not found")
+
+    if agency.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            403,
+            "Only verified agencies can respond to offers"
+        )
+
+    # Only ACCEPTED or REJECTED are valid responses
+    if data.status not in (
+        AgencyOfferStatus.ACCEPTED,
+        AgencyOfferStatus.REJECTED
+    ):
+        raise HTTPException(
+            400,
+            "You can only accept or reject an offer"
+        )
+
+    # Lock offer
+    offer = (
+        db.query(AgencyBookingOffer)
+        .filter(
+            AgencyBookingOffer.id == offer_id,
+            AgencyBookingOffer.agency_id == agency.id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not offer:
+        raise HTTPException(
+            404,
+            "Offer not found for your agency"
+        )
+
+    if offer.status != AgencyOfferStatus.PENDING:
+        raise HTTPException(
+            409,
+            "This offer has already been responded to"
+        )
+
+    booking = db.query(Booking).filter(
+        Booking.id == offer.booking_id
+    ).first()
+
+    if not booking or booking.booking_status != BookingStatus.PENDING:
+        raise HTTPException(
+            409,
+            "This booking is no longer available"
+        )
+
+    try:
+        offer.status = data.status
+        offer.responded_at = datetime.now(timezone.utc)
+
+        # Notify active administrators
+        admins = db.query(User).filter(
+            User.role == UserRole.ADMIN,
+            User.is_active.is_(True)
+        ).all()
+
+        for admin in admins:
+            create_notification(
+                db=db,
+                user_id=admin.id,
+                title="Agency Booking Response",
+                message=(
+                    f"Agency {agency.business_name} "
+                    f"{data.status.value} offer for booking "
+                    f"#{booking.id}"
+                ),
+                notification_type="agency_offer_response",
+                booking_id=booking.id
+            )
+
+        db.commit()
+        db.refresh(offer)
+
+        return offer
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+# =====================================
+# AGENCY ASSIGNS DRIVER AND VEHICLE
+# =====================================
+
+@router.post("/offers/{offer_id}/assign")
+def agency_assign_driver(
+    offer_id: int,
+    data: BookingAssignment,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.AGENCY)
+    )
+):
+    # Find agency
+    agency = db.query(Agency).filter(
+        Agency.user_id == current_user.id
+    ).first()
+
+    if not agency:
+        raise HTTPException(404, "Agency not found")
+
+    if agency.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(403, "Agency is not verified")
+
+    # Lock accepted offer
+    offer = (
+        db.query(AgencyBookingOffer)
+        .filter(
+            AgencyBookingOffer.id == offer_id,
+            AgencyBookingOffer.agency_id == agency.id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not offer:
+        raise HTTPException(404, "Agency offer not found")
+
+    if offer.status != AgencyOfferStatus.ACCEPTED:
+        raise HTTPException(
+            409,
+            "Only accepted offers can be assigned"
+        )
+
+    # Lock booking
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == offer.booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    if booking.booking_status != BookingStatus.PENDING:
+        raise HTTPException(
+            409,
+            "Booking is no longer available for assignment"
+        )
+
+    if not booking.scheduled_at:
+        raise HTTPException(
+            409,
+            "Booking pickup date and time are required"
+        )
+
+    # Find driver belonging to this agency
+    driver = (
+        db.query(Driver)
+        .filter(
+            Driver.id == data.driver_id,
+            Driver.agency_id == agency.id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not driver:
+        raise HTTPException(
+            404,
+            "Driver does not belong to your agency"
+        )
+
+    driver_user = db.get(User, driver.user_id)
+
+    if not driver_user or not driver_user.is_active:
+        raise HTTPException(403, "Driver account is inactive")
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(403, "Driver is not verified")
+
+    if not driver.is_available:
+        raise HTTPException(409, "Driver is unavailable")
+
+    # Find active vehicle belonging to this driver
+    vehicle = (
+        db.query(Vehicle)
+        .filter(
+            Vehicle.id == data.vehicle_id,
+            Vehicle.driver_id == driver.id,
+            Vehicle.is_active.is_(True)
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not vehicle:
+        raise HTTPException(
+            400,
+            "Vehicle is inactive or does not belong to this driver"
+        )
+
+    if vehicle.seating_capacity < booking.passenger_count:
+        raise HTTPException(
+            400,
+            "Vehicle does not have enough passenger capacity"
+        )
+
+    # Check existing schedule conflicts
+    check_schedule_conflicts(
+        db=db,
+        booking=booking,
+        driver_id=driver.id,
+        vehicle_id=vehicle.id
+    )
+
+    # Assign driver and vehicle
+    booking.driver_id = driver.id
+    booking.vehicle_id = vehicle.id
+    booking.booking_status = BookingStatus.DRIVER_ASSIGNED
+
+    # Notify passenger
+    create_notification(
+        db=db,
+        user_id=booking.passenger_id,
+        title="Driver Assigned",
+        message=(
+            f"Your booking #{booking.id} has been assigned "
+            f"to driver {driver_user.full_name}"
+        ),
+        notification_type="driver_assigned",
+        booking_id=booking.id
+    )
+
+    # Notify driver
+    create_notification(
+        db=db,
+        user_id=driver.user_id,
+        title="New Trip Assigned",
+        message=f"You have been assigned booking #{booking.id}",
+        notification_type="trip_assigned",
+        booking_id=booking.id
+    )
+
+    try:
+        db.commit()
+        db.refresh(booking)
+
+        return {
+            "message": "Driver assigned successfully",
+            "booking_id": booking.id,
+            "offer_id": offer.id,
+            "driver_id": driver.id,
+            "vehicle_id": vehicle.id,
+            "booking_status": booking.booking_status.value
+        }
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "Booking assignment conflict"
+        )

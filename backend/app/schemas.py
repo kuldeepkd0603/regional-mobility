@@ -5,6 +5,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.models import TripType, BookingStatus
 from app.models import TripType, BookingStatus, VerificationStatus
+from app.models import AgencyOfferStatus
+
 
 class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
@@ -338,3 +340,22 @@ class AgencyResponse(BaseModel):
 
 class AgencyVerificationUpdate(BaseModel):
     verification_status: VerificationStatus
+
+
+
+class AgencyOfferCreate(BaseModel):
+    agency_id: int = Field(gt=0)
+
+
+class AgencyOfferResponse(BaseModel):
+    id: int
+    booking_id: int
+    agency_id: int
+    status: AgencyOfferStatus
+    offered_at: datetime
+    responded_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class AgencyOfferRespond(BaseModel):
+    status: AgencyOfferStatus

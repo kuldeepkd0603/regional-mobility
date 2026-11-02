@@ -18,6 +18,9 @@ from app.models import (
     BookingStatus,
     TripType,
     VerificationStatus,
+    Agency,
+    AgencyBookingOffer,
+    AgencyOfferStatus,
 )
 
 from app.schemas import (
@@ -25,6 +28,8 @@ from app.schemas import (
     BookingResponse,
     BookingAssignment,
     BookingStatusUpdate,
+    AgencyOfferCreate,
+    AgencyOfferResponse,
 )
 
 from app.api.routes.auth import (
@@ -816,3 +821,120 @@ def update_booking_status(
     db.refresh(booking)
 
     return booking
+
+
+# =====================================
+# ADMIN OFFERS BOOKING TO AN AGENCY
+# =====================================
+
+@router.post(
+    "/{booking_id}/offer",
+    response_model=AgencyOfferResponse,
+    status_code=201
+)
+def offer_booking_to_agency(
+    booking_id: int,
+    data: AgencyOfferCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.ADMIN)
+    )
+):
+    # Find and lock booking
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    if booking.booking_status != BookingStatus.PENDING:
+        raise HTTPException(
+            409,
+            "Only pending bookings can be offered to agencies"
+        )
+
+    if booking.driver_id is not None:
+        raise HTTPException(
+            409,
+            "Booking already has an assigned driver"
+        )
+
+    # Find agency
+    agency = db.query(Agency).filter(
+        Agency.id == data.agency_id
+    ).first()
+
+    if not agency:
+        raise HTTPException(404, "Agency not found")
+
+    if agency.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            403,
+            "Only verified agencies can receive booking offers"
+        )
+
+    agency_user = db.query(User).filter(
+        User.id == agency.user_id,
+        User.is_active.is_(True)
+    ).first()
+
+    if not agency_user:
+        raise HTTPException(
+            403,
+            "Agency account is inactive"
+        )
+
+    # Prevent another active offer for this booking
+    existing_offer = db.query(AgencyBookingOffer).filter(
+        AgencyBookingOffer.booking_id == booking_id,
+        AgencyBookingOffer.status.in_([
+            AgencyOfferStatus.PENDING,
+            AgencyOfferStatus.ACCEPTED
+        ])
+    ).first()
+
+    if existing_offer:
+        raise HTTPException(
+            409,
+            "This booking already has an active agency offer"
+        )
+
+    # Create offer
+    offer = AgencyBookingOffer(
+        booking_id=booking.id,
+        agency_id=agency.id,
+        status=AgencyOfferStatus.PENDING
+    )
+
+    try:
+        db.add(offer)
+        db.flush()
+
+        # Notify agency
+        create_notification(
+            db=db,
+            user_id=agency_user.id,
+            title="New Booking Offer",
+            message=(
+                f"Booking #{booking.id} is available for your agency. "
+                f"Route: {booking.route_id}"
+            ),
+            notification_type="agency_booking_offer",
+            booking_id=booking.id
+        )
+
+        db.commit()
+        db.refresh(offer)
+
+        return offer
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "Unable to create agency booking offer"
+        )

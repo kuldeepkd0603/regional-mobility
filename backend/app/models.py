@@ -43,6 +43,11 @@ class BookingStatus(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     
+class AgencyOfferStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    
 
 class TripType(str, enum.Enum):
     LOCAL = "local"
@@ -400,4 +405,53 @@ class Notification(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
+    )
+
+
+# -------------------------
+# AGENCY BOOKING OFFERS
+# -------------------------
+
+class AgencyBookingOffer(Base):
+    __tablename__ = "agency_booking_offers"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=False,
+        index=True
+    )
+
+    agency_id: Mapped[int] = mapped_column(
+        ForeignKey("agencies.id"),
+        nullable=False,
+        index=True
+    )
+
+    status: Mapped[AgencyOfferStatus] = mapped_column(
+        Enum(
+            AgencyOfferStatus,
+            name="agency_offer_status",
+            values_callable=lambda enum_cls: [
+                item.value for item in enum_cls
+            ]
+        ),
+        default=AgencyOfferStatus.PENDING,
+        nullable=False
+    )
+
+    offered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    responded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
     )
