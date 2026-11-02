@@ -1,11 +1,12 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 from app.db import get_db
 from app.models import User, UserRole
-from app.schemas import UserCreate, UserResponse
+from app.schemas import UserResponse
+from app.api.routes.auth import get_current_user, require_roles
+
 
 router = APIRouter(
     prefix="/users",
@@ -13,39 +14,16 @@ router = APIRouter(
 )
 
 
-@router.post("/", response_model=UserResponse, status_code=201)
-def create_user(
-    user_data: UserCreate,
-    db: Session = Depends(get_db)
-):
-    new_user = User(
-        full_name=user_data.full_name,
-        phone=user_data.phone,
-        email=user_data.email,
-        role=UserRole.PASSENGER
-    )
-
-    try:
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-
-        return new_user
-
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Phone number or email already exists"
-        )
-
-
+# Get one user: Own profile or admin access
 @router.get("/{user_id}", response_model=UserResponse)
 def get_user(
     user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(
+        User.id == user_id
+    ).first()
 
     if not user:
         raise HTTPException(
@@ -53,9 +31,29 @@ def get_user(
             detail="User not found"
         )
 
+    if (
+        current_user.id != user_id
+        and current_user.role != UserRole.ADMIN
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own profile"
+        )
+
     return user
 
 
+# Admin only: Get all users
 @router.get("/", response_model=list[UserResponse])
-def get_all_users(db: Session = Depends(get_db)):
-    return db.query(User).order_by(User.id.desc()).limit(100).all()
+def get_all_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.ADMIN)
+    )
+):
+    return (
+        db.query(User)
+        .order_by(User.id.desc())
+        .limit(100)
+        .all()
+    )

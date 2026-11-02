@@ -78,7 +78,82 @@ class User(Base):
         back_populates="user",
         uselist=False,
     )
+    
+    agency_profile: Mapped["Agency | None"] = relationship(
+    back_populates="user",
+    uselist=False,
+)
+    
+    hashed_password: Mapped[str | None] = mapped_column(
+    String(255),
+    nullable=True
+    )
 
+
+# -------------------------
+# AGENCIES TABLE
+# -------------------------
+
+class Agency(Base):
+    __tablename__ = "agencies"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    business_name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False
+    )
+
+    registration_number: Mapped[str | None] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=True
+    )
+
+    business_email: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True
+    )
+
+    business_address: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    city: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        Enum(VerificationStatus, name="verification_status"),
+        default=VerificationStatus.PENDING,
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user: Mapped["User"] = relationship(
+        back_populates="agency_profile"
+    )
+
+    drivers: Mapped[list["Driver"]] = relationship(
+        back_populates="agency"
+    )
 
 # -------------------------
 # DRIVERS TABLE
@@ -121,6 +196,16 @@ class Driver(Base):
     location_updated_at: Mapped[datetime | None] = mapped_column(
     DateTime(timezone=True),
     nullable=True
+    )
+    
+    agency_id: Mapped[int | None] = mapped_column(
+    ForeignKey("agencies.id"),
+    nullable=True,
+    index=True
+    )
+
+    agency: Mapped["Agency | None"] = relationship(
+        back_populates="drivers"
     )
 # -------------------------
 # VEHICLES TABLE
@@ -246,4 +331,73 @@ class Booking(Base):
     special_instructions: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+    )
+   
+    started_at: Mapped[datetime | None] = mapped_column(
+    DateTime(timezone=True),
+    nullable=True
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    actual_distance_km: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True
+    )
+    
+    
+
+# -------------------------
+# NOTIFICATIONS TABLE
+# -------------------------
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    booking_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=True
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False
+    )
+
+    message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    notification_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False
+    )
+
+    is_read: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
     )

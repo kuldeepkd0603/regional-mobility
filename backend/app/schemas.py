@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, EmailStr
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.models import TripType, BookingStatus
-
+from app.models import TripType, BookingStatus, VerificationStatus
 
 class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
@@ -30,8 +30,9 @@ from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
 class DriverRegistrationCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
-    phone: str = Field(min_length=10, max_length=20)
+    phone: str = Field(min_length=10, max_length=15)
     email: EmailStr | None = None
+    password: str = Field(min_length=8, max_length=128)
     license_number: str = Field(min_length=5, max_length=50)
 
 
@@ -49,6 +50,8 @@ class DriverResponse(BaseModel):
 class DriverAvailabilityUpdate(BaseModel):
     is_available: bool
 
+class DriverVerificationUpdate(BaseModel):
+    verification_status: VerificationStatus
 
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -157,17 +160,25 @@ from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 
+
 class TripResponse(BaseModel):
     id: int
     passenger_id: int
     driver_id: int | None
     vehicle_id: int | None
     route_id: int
+
     booking_status: BookingStatus
     trip_type: TripType
+
     estimated_fare: float
     final_fare: float | None
+
     scheduled_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    actual_distance_km: float | None
+
     passenger_count: int
     created_at: datetime
 
@@ -178,6 +189,14 @@ class TripResponse(BaseModel):
     distance_km: float
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TripCompletionRequest(BaseModel):
+    actual_distance_km: float = Field(
+        gt=0,
+        le=3000
+    )
+
     
 from pydantic import BaseModel, Field
 
@@ -201,14 +220,29 @@ class NearbyDriverResponse(BaseModel):
     distance_km: float
     
     
+
 from pydantic import BaseModel, Field
 from app.models import TripType
 
 
 class FareEstimateRequest(BaseModel):
     trip_type: TripType
-    distance_km: float = Field(gt=0, le=2000)
-    passenger_count: int = Field(default=1, ge=1, le=50)
+
+    vehicle_type: str = Field(
+        min_length=2,
+        max_length=50
+    )
+
+    distance_km: float = Field(
+        gt=0,
+        le=2000
+    )
+
+    passenger_count: int = Field(
+        default=1,
+        ge=1,
+        le=50
+    )
 
 
 class FareEstimateResponse(BaseModel):
@@ -219,3 +253,88 @@ class FareEstimateResponse(BaseModel):
     per_km_rate: float
     estimated_fare: float
     currency: str = "INR"
+
+    
+    
+    
+from pydantic import BaseModel, Field
+
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=150)
+    phone: str = Field(min_length=10, max_length=15)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    phone: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    role: str
+    
+    
+
+class AssignedDriverLocationResponse(BaseModel):
+    booking_id: int
+    driver_id: int
+    driver_name: str
+    vehicle_id: int
+    vehicle_name: str
+    vehicle_type: str
+    latitude: float
+    longitude: float
+    location_updated_at: datetime
+
+
+
+class NotificationResponse(BaseModel):
+    id: int
+    user_id: int
+    booking_id: int | None
+    title: str
+    message: str
+    notification_type: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+
+class AgencyRegistrationCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=15)
+    email: EmailStr | None = None
+    password: str = Field(min_length=8, max_length=128)
+
+    business_name: str = Field(min_length=2, max_length=150)
+    registration_number: str | None = Field(
+        default=None,
+        max_length=100
+    )
+    business_email: EmailStr | None = None
+    business_address: str = Field(min_length=5)
+    city: str = Field(min_length=2, max_length=100)
+
+
+class AgencyResponse(BaseModel):
+    id: int
+    user_id: int
+    business_name: str
+    registration_number: str | None
+    business_email: str | None
+    business_address: str
+    city: str
+    verification_status: VerificationStatus
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgencyVerificationUpdate(BaseModel):
+    verification_status: VerificationStatus

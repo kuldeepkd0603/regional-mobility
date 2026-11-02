@@ -35,7 +35,17 @@ def run_migrations_offline():
 
     with context.begin_transaction():
         context.run_migrations()
+def include_object(
+    object,
+    name,
+    type_,
+    reflected,
+    compare_to
+):
+    if type_ == "table" and name == "spatial_ref_sys":
+        return False
 
+    return True
 
 def run_migrations_online():
     connectable = engine_from_config(
@@ -48,6 +58,7 @@ def run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
             compare_type=True,
         )
 
