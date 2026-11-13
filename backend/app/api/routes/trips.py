@@ -17,19 +17,12 @@ from app.models import (
 )
 from app.schemas import TripResponse, TripCompletionRequest
 from app.api.routes.auth import get_current_user, require_roles
-
+from app.core.pricing import calculate_final_fare
 router = APIRouter(
     prefix="/trips",
     tags=["Trip Management"]
 )
 
-VEHICLE_RATES = {
-    "dzire": {"base_fare": 100, "per_km": 12},
-    "eeco": {"base_fare": 100, "per_km": 11},
-    "ertiga": {"base_fare": 150, "per_km": 15},
-    "innova": {"base_fare": 200, "per_km": 18},
-    "urbania": {"base_fare": 500, "per_km": 25},
-}
 
 
 # Helper: Build trip response
@@ -52,6 +45,9 @@ def build_trip_response(booking, route):
         "pickup_address": route.pickup_address,
         "drop_address": route.drop_address,
         "distance_km": route.distance_km,
+        "started_at": booking.started_at,
+        "completed_at": booking.completed_at,
+        "actual_distance_km": booking.actual_distance_km,
     }
 
 
@@ -272,22 +268,19 @@ def complete_trip(
     if not vehicle:
         raise HTTPException(409, "Assigned vehicle not found")
 
-    vehicle_type = vehicle.vehicle_type.lower()
-
-    rates = VEHICLE_RATES.get(vehicle_type)
-
-    if not rates:
-        raise HTTPException(
-            409,
-            f"Fare configuration missing for {vehicle.vehicle_type}"
-        )
-
     actual_distance = data.actual_distance_km
 
-    final_fare = (
-        rates["base_fare"]
-        + actual_distance * rates["per_km"]
-    )
+    try:
+        final_fare = calculate_final_fare(
+            vehicle_type=vehicle.vehicle_type,
+            actual_distance_km=actual_distance,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error)
+        )
 
     booking.actual_distance_km = actual_distance
     booking.final_fare = round(final_fare, 2)

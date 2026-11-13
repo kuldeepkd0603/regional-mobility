@@ -7,13 +7,17 @@ from app.models import Notification, User
 from app.schemas import NotificationResponse
 from app.api.routes.auth import get_current_user
 
-
+from pydantic import BaseModel
+from typing import Literal
+from app.models import DeviceToken
 router = APIRouter(
     prefix="/notifications",
     tags=["Notifications"]
 )
 
-
+class DeviceTokenRequest(BaseModel):
+    token: str
+    platform: Literal["android", "ios"] = "android"
 # 1. Get logged-in user's notifications
 @router.get("/", response_model=list[NotificationResponse])
 def get_notifications(
@@ -89,4 +93,50 @@ def mark_all_notifications_read(
     return {
         "message": "All notifications marked as read",
         "updated_count": updated_count
+    }
+@router.post("/device-token")
+def register_device_token(
+    data: DeviceTokenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    device = db.query(DeviceToken).filter(
+        DeviceToken.token == data.token
+    ).first()
+
+    if device:
+        device.user_id = current_user.id
+        device.platform = data.platform
+    else:
+        device = DeviceToken(
+            user_id=current_user.id,
+            token=data.token,
+            platform=data.platform
+        )
+        db.add(device)
+
+    db.commit()
+
+    return {
+        "message": "Device token registered successfully"
+    }
+
+
+@router.delete("/device-token")
+def remove_device_token(
+    token: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    device = db.query(DeviceToken).filter(
+        DeviceToken.token == token,
+        DeviceToken.user_id == current_user.id
+    ).first()
+
+    if device:
+        db.delete(device)
+        db.commit()
+
+    return {
+        "message": "Device token removed successfully"
     }

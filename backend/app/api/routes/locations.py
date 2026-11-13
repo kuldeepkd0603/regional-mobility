@@ -12,7 +12,8 @@ from app.schemas import (
     NearbyDriverResponse,
     AssignedDriverLocationResponse,
 )
-from app.api.routes.auth import get_current_user, require_roles
+
+from app.api.routes.auth import require_roles
 
 from app.models import (
     Booking,
@@ -24,13 +25,17 @@ from app.models import (
     VerificationStatus,
 )
 
+
 router = APIRouter(
     prefix="/locations",
     tags=["Driver Location Management"]
 )
 
 
-# 1. Driver updates their own live location
+# ============================================================
+# 1. DRIVER UPDATES THEIR OWN LIVE LOCATION
+# ============================================================
+
 @router.patch("/driver/{driver_id}")
 def update_driver_location(
     driver_id: int,
@@ -40,8 +45,6 @@ def update_driver_location(
         require_roles(UserRole.DRIVER)
     )
 ):
-    # Find driver using both driver ID and logged-in user ID.
-    # This prevents drivers from updating someone else's location.
     driver = db.query(Driver).filter(
         Driver.id == driver_id,
         Driver.user_id == current_user.id
@@ -67,6 +70,7 @@ def update_driver_location(
 
     driver.latitude = location.latitude
     driver.longitude = location.longitude
+
     driver.location_updated_at = datetime.now(timezone.utc)
 
     db.commit()
@@ -81,7 +85,10 @@ def update_driver_location(
     }
 
 
-# 3. Passenger tracks assigned driver
+# ============================================================
+# 2. PASSENGER TRACKS ASSIGNED DRIVER
+# ============================================================
+
 @router.get(
     "/booking/{booking_id}/driver",
     response_model=AssignedDriverLocationResponse
@@ -96,16 +103,19 @@ def get_assigned_driver_location(
     booking = db.get(Booking, booking_id)
 
     if not booking:
-        raise HTTPException(404, "Booking not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
 
-    # Passenger can only track their own booking.
+    # Passenger can track only their own booking.
     if (
         current_user.role == UserRole.PASSENGER
         and booking.passenger_id != current_user.id
     ):
         raise HTTPException(
-            403,
-            "You cannot track another passenger's booking"
+            status_code=403,
+            detail="You cannot track another passenger's booking"
         )
 
     if booking.booking_status not in [
@@ -113,41 +123,47 @@ def get_assigned_driver_location(
         BookingStatus.ONGOING
     ]:
         raise HTTPException(
-            400,
-            "Driver tracking is available only for assigned or ongoing trips"
+            status_code=400,
+            detail="Driver tracking is available only for assigned or ongoing trips"
         )
 
     if not booking.driver_id:
-        raise HTTPException(404, "No driver assigned")
+        raise HTTPException(
+            status_code=404,
+            detail="No driver assigned"
+        )
 
     driver = db.get(Driver, booking.driver_id)
 
     if not driver:
-        raise HTTPException(404, "Driver not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Driver not found"
+        )
 
     if driver.latitude is None or driver.longitude is None:
         raise HTTPException(
-            404,
-            "Driver location is not available yet"
+            status_code=404,
+            detail="Driver location is not available yet"
         )
 
     if driver.location_updated_at is None:
         raise HTTPException(
-            404,
-            "Driver has not shared their location"
+            status_code=404,
+            detail="Driver has not shared their location"
         )
 
     now = datetime.now(timezone.utc)
     updated_at = driver.location_updated_at
 
-    # Handle a naive datetime defensively.
+    # Handle timezone-naive datetime.
     if updated_at.tzinfo is None:
         updated_at = updated_at.replace(tzinfo=timezone.utc)
 
     if (now - updated_at).total_seconds() > 300:
         raise HTTPException(
-            409,
-            "Driver location is outdated"
+            status_code=409,
+            detail="Driver location is outdated"
         )
 
     user = db.get(User, driver.user_id)
@@ -155,8 +171,8 @@ def get_assigned_driver_location(
 
     if not user or not vehicle:
         raise HTTPException(
-            404,
-            "Driver or assigned vehicle information not found"
+            status_code=404,
+            detail="Driver or assigned vehicle information not found"
         )
 
     return {
@@ -172,8 +188,10 @@ def get_assigned_driver_location(
     }
 
 
-# 2. Find nearby available drivers
-# Passenger and admin access only.
+# ============================================================
+# 3. FIND NEARBY AVAILABLE DRIVERS
+# ============================================================
+
 @router.get(
     "/nearby",
     response_model=list[NearbyDriverResponse]
@@ -183,70 +201,114 @@ def find_nearby_drivers(
     longitude: float = Query(ge=-180, le=180),
     radius_km: float = Query(default=10, gt=0, le=100),
     passenger_count: int = Query(default=1, ge=1, le=50),
-    vehicle_type: str | None = None,
+    vehicle_type: str | None = Query(default=None),
+
     db: Session = Depends(get_db),
+
     current_user: User = Depends(
         require_roles(UserRole.PASSENGER, UserRole.ADMIN)
     )
 ):
+
+    # Validate that coordinates are within valid geographic ranges.
+    if not (-90 <= latitude <= 90):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid latitude"
+        )
+
+    if not (-180 <= longitude <= 180):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid longitude"
+        )
+
+    # SQLAlchemy text() uses :parameter syntax.
     sql = text("""
         SELECT
             d.id AS driver_id,
             u.full_name AS driver_name,
+
             v.id AS vehicle_id,
             v.vehicle_name,
             v.vehicle_type,
             v.registration_number,
             v.seating_capacity,
+
             d.rating,
             d.latitude,
             d.longitude,
 
             extensions.ST_Distance(
                 extensions.ST_SetSRID(
-                    extensions.ST_MakePoint(d.longitude, d.latitude),
+                    extensions.ST_MakePoint(
+                        d.longitude,
+                        d.latitude
+                    ),
                     4326
                 )::extensions.geography,
 
                 extensions.ST_SetSRID(
-                    extensions.ST_MakePoint(:longitude, :latitude),
+                    extensions.ST_MakePoint(
+                        :longitude,
+                        :latitude
+                    ),
                     4326
                 )::extensions.geography
             ) / 1000.0 AS distance_km
 
         FROM drivers d
 
-        JOIN users u ON u.id = d.user_id
-        JOIN vehicles v ON v.driver_id = d.id
+        JOIN users u
+            ON u.id = d.user_id
+
+        JOIN vehicles v
+            ON v.driver_id = d.id
 
         WHERE
+
             d.is_available = TRUE
-            AND d.verification_status = 'verified'
+
+            AND d.verification_status = 'VERIFIED'
+
             AND u.is_active = TRUE
+
             AND v.is_active = TRUE
 
             AND d.latitude IS NOT NULL
+
             AND d.longitude IS NOT NULL
 
-            -- Only locations updated within the last 5 minutes
+            -- Driver location must be updated within 5 minutes.
             AND d.location_updated_at >=
                 NOW() - INTERVAL '5 minutes'
 
+            -- Vehicle must have enough seats.
             AND v.seating_capacity >= :passenger_count
 
+            -- Optional vehicle type filter.
             AND (
-                :vehicle_type IS NULL
-                OR LOWER(v.vehicle_type) = LOWER(:vehicle_type)
+                CAST(:vehicle_type AS TEXT) IS NULL
+                OR LOWER(v.vehicle_type) =
+                   LOWER(CAST(:vehicle_type AS TEXT))
             )
 
+            -- Search drivers within the selected radius.
             AND extensions.ST_DWithin(
+
                 extensions.ST_SetSRID(
-                    extensions.ST_MakePoint(d.longitude, d.latitude),
+                    extensions.ST_MakePoint(
+                        d.longitude,
+                        d.latitude
+                    ),
                     4326
                 )::extensions.geography,
 
                 extensions.ST_SetSRID(
-                    extensions.ST_MakePoint(:longitude, :latitude),
+                    extensions.ST_MakePoint(
+                        :longitude,
+                        :latitude
+                    ),
                     4326
                 )::extensions.geography,
 
@@ -254,21 +316,25 @@ def find_nearby_drivers(
             )
 
         ORDER BY distance_km ASC
+
         LIMIT 50
     """)
 
     result = db.execute(
         sql,
         {
-            "latitude": latitude,
             "longitude": longitude,
-            "radius_m": radius_km * 1000,
+            "latitude": latitude,
             "passenger_count": passenger_count,
-            "vehicle_type": vehicle_type
+            "vehicle_type": vehicle_type,
+            "radius_m": radius_km * 1000,
         }
     )
 
-    return [
+    drivers = [
         dict(row)
         for row in result.mappings().all()
     ]
+
+    return drivers
+

@@ -2,6 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from datetime import datetime, timezone
+from pydantic import BaseModel, Field
 
 from app.db import get_db
 from app.models import (
@@ -24,7 +26,9 @@ router = APIRouter(
     prefix="/drivers",
     tags=["Drivers"]
 )
-
+class DriverLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
 
 # Register a new driver (public registration)
 @router.post("/register", response_model=DriverResponse, status_code=201)
@@ -81,7 +85,25 @@ def get_all_drivers(
         .limit(100)
         .all()
     )
+# Driver can view their own driver profile
+@router.get("/me", response_model=DriverResponse)
+def get_my_driver_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.DRIVER)
+    )
+):
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
 
+    if not driver:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver profile not found"
+        )
+
+    return driver
 
 # Driver can view own profile; admin can view any profile
 @router.get("/{driver_id}", response_model=DriverResponse)
@@ -155,6 +177,52 @@ def update_availability(
         "is_available": driver.is_available
     }
 
+# Driver can update their own live location while online
+@router.patch("/{driver_id}/location")
+def update_driver_location(
+    driver_id: int,
+    data: DriverLocationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.DRIVER)
+    )
+):
+    driver = db.query(Driver).filter(
+        Driver.id == driver_id,
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(
+            status_code=404,
+            detail="Your driver profile was not found"
+        )
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver must be verified to share location"
+        )
+
+    if not driver.is_available:
+        raise HTTPException(
+            status_code=403,
+            detail="Go online before sharing your location"
+        )
+
+    driver.latitude = data.latitude
+    driver.longitude = data.longitude
+    driver.location_updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(driver)
+
+    return {
+        "message": "Driver location updated",
+        "latitude": driver.latitude,
+        "longitude": driver.longitude,
+        "location_updated_at": driver.location_updated_at
+    }
 
 # Admin only: approve or reject driver
 @router.patch("/{driver_id}/verification", response_model=DriverResponse)

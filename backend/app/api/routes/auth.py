@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import User, UserRole
-from app.schemas import RegisterRequest, LoginRequest, TokenResponse
+from app.schemas import (
+    RegisterRequest,
+    LoginRequest,
+    TokenResponse,
+    ProfileUpdateRequest,
+)
 from app.core.security import (
     hash_password,
     verify_password,
@@ -152,6 +157,25 @@ def require_roles(*allowed_roles: UserRole):
 def get_my_profile(
     current_user: User = Depends(get_current_user)
 ):
+    return {
+        "id": current_user.id,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "role": current_user.role.value,
+    }
+    
+    
+@router.patch("/me")
+def update_my_profile(
+    data: ProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    current_user.full_name = data.full_name.strip()
+
+    db.commit()
+    db.refresh(current_user)
+
     return {
         "id": current_user.id,
         "full_name": current_user.full_name,

@@ -107,16 +107,36 @@ def create_vehicle(
 
 
 # Admin: all vehicles | Agency: its own vehicles
+
+# Admin: all vehicles
+# Agency: its own vehicles
+# Driver: their own vehicles
 @router.get("/", response_model=list[VehicleResponse])
 def get_vehicles(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.ADMIN, UserRole.AGENCY)
+        require_roles(
+            UserRole.ADMIN,
+            UserRole.AGENCY,
+            UserRole.DRIVER
+        )
     )
 ):
     query = db.query(Vehicle)
 
-    if current_user.role == UserRole.AGENCY:
+    if current_user.role == UserRole.DRIVER:
+        driver = db.query(Driver).filter(
+            Driver.user_id == current_user.id
+        ).first()
+
+        if not driver:
+            raise HTTPException(404, "Driver profile not found")
+
+        query = query.filter(
+            Vehicle.driver_id == driver.id
+        )
+
+    elif current_user.role == UserRole.AGENCY:
         agency = get_verified_agency(db, current_user.id)
 
         query = query.join(
@@ -129,7 +149,6 @@ def get_vehicles(
     return query.order_by(
         Vehicle.id.desc()
     ).limit(100).all()
-
 
 # Get vehicle details: Owner driver, agency or admin
 @router.get("/{vehicle_id}", response_model=VehicleResponse)

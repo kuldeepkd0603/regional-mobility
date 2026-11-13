@@ -12,9 +12,11 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    CheckConstraint,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index, UniqueConstraint, func
 from app.db import Base
 
 
@@ -259,7 +261,9 @@ class RideRoute(Base):
     distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
+    bookings: Mapped[list["Booking"]] = relationship(
+        back_populates="route"
+    )
 
 # -------------------------
 # BOOKINGS TABLE
@@ -284,6 +288,17 @@ class Booking(Base):
         ForeignKey("vehicles.id"),
         nullable=True,
     )
+
+    preferred_vehicle_type: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    route_id: Mapped[int] = mapped_column(
+        ForeignKey("ride_routes.id"),
+        nullable=False,
+    )
+
 
     route_id: Mapped[int] = mapped_column(
         ForeignKey("ride_routes.id"),
@@ -353,10 +368,15 @@ class Booking(Base):
         nullable=True
     )
     
+    route: Mapped["RideRoute"] = relationship(
+        back_populates="bookings"
+    )
+    
     
 
 # -------------------------
-# NOTIFICATIONS TABLE
+# NOTIFICATIONS 
+
 # -------------------------
 
 class Notification(Base):
@@ -454,4 +474,144 @@ class AgencyBookingOffer(Base):
     responded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True
+    )
+    
+    
+
+class DriverBookingRequest(Base):
+    __tablename__ = "driver_booking_requests"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "booking_id",
+            "driver_id",
+            name="uq_booking_driver_request"
+        ),
+        Index(
+            "ix_driver_booking_request_expiry",
+            "status",
+            "expires_at"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    booking_id = Column(
+        Integer,
+        ForeignKey("bookings.id"),
+        nullable=False
+    )
+
+    driver_id = Column(
+        Integer,
+        ForeignKey("drivers.id"),
+        nullable=False
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="pending"
+    )
+
+    offered_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now()
+    )
+
+    expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False
+    )
+
+    responded_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+
+class DeviceToken(Base):
+    __tablename__ = "device_tokens"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    token: Mapped[str] = mapped_column(
+        String(500),
+        unique=True,
+        nullable=False
+    )
+
+    platform: Mapped[str] = mapped_column(
+        String(20),
+        default="android",
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+class DriverReview(Base):
+    __tablename__ = "driver_reviews"
+
+    __table_args__ = (
+        UniqueConstraint("booking_id", name="uq_driver_review_booking"),
+        CheckConstraint(
+            "rating >= 1 AND rating <= 5",
+            name="ck_driver_review_rating"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=False,
+        index=True
+    )
+
+    passenger_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    driver_id: Mapped[int] = mapped_column(
+        ForeignKey("drivers.id"),
+        nullable=False,
+        index=True
+    )
+
+    rating: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False
+    )
+
+    review: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
     )

@@ -1,6 +1,6 @@
 
 from fastapi import APIRouter, HTTPException
-
+from app.core.pricing import calculate_estimated_fare
 from app.schemas import (
     FareEstimateRequest,
     FareEstimateResponse
@@ -27,42 +27,28 @@ TRIP_MULTIPLIERS = {
     "religious_tour": 1.0,
 }
 
-
 @router.post("/estimate", response_model=FareEstimateResponse)
 def estimate_fare(data: FareEstimateRequest):
 
-    vehicle_type = data.vehicle_type.lower()
-    trip_type = data.trip_type.value
-
-    if vehicle_type not in VEHICLE_RATES:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported vehicle type"
+    try:
+        result = calculate_estimated_fare(
+            vehicle_type=data.vehicle_type,
+            distance_km=data.distance_km,
+            trip_type=data.trip_type.value,
         )
 
-    if trip_type not in TRIP_MULTIPLIERS:
+    except ValueError as error:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported trip type"
+            detail=str(error)
         )
-
-    rates = VEHICLE_RATES[vehicle_type]
-
-    chargeable_distance = (
-        data.distance_km * TRIP_MULTIPLIERS[trip_type]
-    )
-
-    estimated_fare = (
-        rates["base_fare"]
-        + chargeable_distance * rates["per_km"]
-    )
 
     return {
         "trip_type": data.trip_type,
         "distance_km": data.distance_km,
-        "chargeable_distance_km": chargeable_distance,
-        "base_fare": rates["base_fare"],
-        "per_km_rate": rates["per_km"],
-        "estimated_fare": round(estimated_fare, 2),
-        "currency": "INR"
+        "chargeable_distance_km": result["chargeable_distance_km"],
+        "base_fare": result["base_fare"],
+        "per_km_rate": result["per_km_rate"],
+        "estimated_fare": result["estimated_fare"],
+        "currency": "INR",
     }

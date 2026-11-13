@@ -12,7 +12,8 @@ class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
     phone: str = Field(min_length=10, max_length=20)
     email: EmailStr | None = None
-
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=150)
 
 class UserResponse(BaseModel):
     id: int
@@ -90,6 +91,9 @@ class BookingCreate(BaseModel):
     passenger_id: int
 
     trip_type: TripType
+    preferred_vehicle_type: str = Field(
+    pattern="^(dzire|eeco|ertiga|innova|urbania)$"
+    )
 
     pickup_city: str = Field(min_length=2, max_length=100)
     drop_city: str = Field(min_length=2, max_length=100)
@@ -126,13 +130,28 @@ class BookingCreate(BaseModel):
         return self
 
 
+
+class RideRouteResponse(BaseModel):
+    id: int
+    pickup_city: str
+    drop_city: str
+    pickup_address: str
+    drop_address: str
+    distance_km: float | None
+
+    model_config = ConfigDict(from_attributes=True)
+    
 class BookingResponse(BaseModel):
     id: int
     passenger_id: int
     driver_id: int | None
     vehicle_id: int | None
+    preferred_vehicle_type: str | None = Field(
+    default=None,
+    pattern="^(dzire|eeco|ertiga|innova|urbania)$"
+    )
     route_id: int
-
+    route: RideRouteResponse
     booking_status: BookingStatus
     trip_type: TripType
 
@@ -156,7 +175,9 @@ class BookingAssignment(BaseModel):
 
 class BookingStatusUpdate(BaseModel):
     booking_status: BookingStatus
-    
+
+class DriverBookingAccept(BaseModel):
+    vehicle_id: int
     
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
@@ -359,3 +380,41 @@ class AgencyOfferResponse(BaseModel):
 
 class AgencyOfferRespond(BaseModel):
     status: AgencyOfferStatus
+    
+    
+class DriverReviewCreate(BaseModel):
+    booking_id: int = Field(gt=0)
+    rating: int = Field(ge=1, le=5)
+    review: str | None = Field(default=None, max_length=1000)
+
+
+class DriverReviewResponse(BaseModel):
+    id: int
+    booking_id: int
+    passenger_id: int
+    driver_id: int
+    rating: int
+    review: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+    
+
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+
+
+class DriverBookingRequestResponse(BaseModel):
+    id: int
+    booking_id: int
+    driver_id: int
+    status: str
+    offered_at: datetime
+    expires_at: datetime
+    responded_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DriverBookingRequestAction(BaseModel):
+    vehicle_id: int | None = None

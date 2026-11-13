@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1002494523996",
+    "project_id": "regional-mobility-593fd",
+    "storage_bucket": "regional-mobility-593fd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1002494523996:android:5a0c1295be25c61b6e4499",
+        "android_client_info": {
+          "package_name": "com.example.driver_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAv2K7SqG5qQI2og24rh1bW8Gu7dLs6aUM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1002494523996:android:b81780ab008281466e4499",
+        "android_client_info": {
+          "package_name": "com.regionalmobility.passenger_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAv2K7SqG5qQI2og24rh1bW8Gu7dLs6aUM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

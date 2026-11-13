@@ -11,6 +11,12 @@ from app.api.routes import fares
 from app.api.routes import auth
 from app.api.routes import notifications
 from app.api.routes import agencies
+from app.api.routes import google_routes
+from app.api.routes import earnings
+from app.api.routes import reviews
+
+
+
 app = FastAPI(
     title="Regional Mobility Platform",
     description="Taxi booking and mobility marketplace API",
@@ -27,6 +33,9 @@ app.include_router(fares.router)
 app.include_router(auth.router)
 app.include_router(notifications.router)
 app.include_router(agencies.router)
+app.include_router(google_routes.router)
+app.include_router(earnings.router)
+app.include_router(reviews.router)     
 @app.get("/")
 def root():
     return {
