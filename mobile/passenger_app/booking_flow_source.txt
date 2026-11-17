@@ -1,0 +1,3400 @@
+
+
+========== .\lib\screens\booking\destination_location_screen.dart ==========
+
+
+import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'trip_type_screen.dart';
+import '../../core/services/api_service.dart';
+import 'vehicle_selection_screen.dart';
+import '../../core/services/api_service.dart';
+class DestinationLocationScreen extends StatefulWidget {
+  final double pickupLatitude;
+  final double pickupLongitude;
+  final String pickupAddress;
+  final String pickupCity;
+
+  const DestinationLocationScreen({
+    super.key,
+    required this.pickupLatitude,
+    required this.pickupLongitude,
+    required this.pickupAddress,
+    required this.pickupCity,
+  });
+
+  @override
+  State<DestinationLocationScreen> createState() =>
+      _DestinationLocationScreenState();
+}
+
+class _DestinationLocationScreenState
+    extends State<DestinationLocationScreen> {
+  static const Color green = Color(0xFF079B80);
+  static const Color navy = Color(0xFF06465D);
+  static const Color dark = Color(0xFF17202D);
+
+  GoogleMapController? _mapController;
+
+  final TextEditingController _searchController =
+      TextEditingController();
+
+  // Default destination: Mahakaleshwar Temple, Ujjain
+  LatLng _destination = const LatLng(23.1828, 75.7682);
+
+  String _destinationAddress = 'Mahakaleshwar Temple';
+  String _destinationCity = 'Ujjain';
+  bool _loadingLocation = false;
+
+  LatLng get _pickup => LatLng(
+        widget.pickupLatitude,
+        widget.pickupLongitude,
+      );
+
+  Set<Marker> get _markers => {
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: _pickup,
+          infoWindow: InfoWindow(
+            title: 'Pickup',
+            snippet: widget.pickupAddress,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueGreen,
+          ),
+        ),
+        Marker(
+          markerId: const MarkerId('destination'),
+          position: _destination,
+          infoWindow: InfoWindow(
+            title: 'Destination',
+            snippet: _destinationAddress,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueRed,
+          ),
+        ),
+      };
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _setDestination(
+    LatLng location, {
+    bool moveCamera = false,
+    String? knownAddress,
+  }) async {
+    setState(() {
+      _destination = location;
+      if (knownAddress != null) {
+        _destinationAddress = knownAddress;
+      }
+    });
+
+    if (moveCamera) {
+      await _mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(location, 14),
+      );
+    }
+
+    if (knownAddress == null) {
+      await _reverseGeocode(location);
+    }
+  }
+
+  Future<void> _reverseGeocode(LatLng location) async {
+    try {
+      final places = await placemarkFromCoordinates(
+        location.latitude,
+        location.longitude,
+      );
+
+      if (places.isEmpty || !mounted) return;
+
+      final place = places.first;
+      final parts = [
+        place.name,
+        place.subLocality,
+        place.locality,
+      ].where((value) => value != null && value.isNotEmpty).toList();
+
+      setState(() {
+        _destinationAddress = parts.isEmpty
+            ? 'Selected Location'
+            : parts.join(', ');
+        _destinationCity = place.locality ??
+            place.subAdministrativeArea ??
+            'Ujjain';
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _destinationAddress = 'Selected Location');
+      }
+    }
+  }
+
+  Future<void> _searchDestination() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+
+    try {
+      final results = await locationFromAddress(query);
+
+      if (results.isEmpty) {
+        _message('Destination not found.');
+        return;
+      }
+
+      await _setDestination(
+        LatLng(
+          results.first.latitude,
+          results.first.longitude,
+        ),
+        moveCamera: true,
+        knownAddress: query,
+      );
+    } catch (_) {
+      _message('Unable to search this destination.');
+    }
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _loadingLocation = true);
+
+    try {
+      var permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _message('Location permission is required.');
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      await _setDestination(
+        LatLng(position.latitude, position.longitude),
+        moveCamera: true,
+      );
+    } catch (_) {
+      _message('Unable to get current location.');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingLocation = false);
+      }
+    }
+  }
+
+  void _selectPopular(
+    String name,
+    String city,
+    double latitude,
+    double longitude,
+  ) {
+    _searchController.text = name;
+    setState(() {
+      _destinationAddress = name;
+      _destinationCity = city;
+    });
+
+    _setDestination(
+      LatLng(latitude, longitude),
+      moveCamera: true,
+      knownAddress: name,
+    );
+  }
+
+  
+  Future<void> _confirmDestination() async {
+    // STEP 1: Open Trip Type screen
+    final tripResult = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const TripTypeScreen(),
+      ),
+    );
+
+    if (tripResult == null || !mounted) return;
+
+    // STEP 2: Calculate actual route distance
+    double distanceKm;
+    bool usingFallbackDistance = false;
+
+    try {
+      distanceKm = await ApiService.getRouteDistanceKm(
+        pickupLatitude: widget.pickupLatitude,
+        pickupLongitude: widget.pickupLongitude,
+        dropLatitude: _destination.latitude,
+        dropLongitude: _destination.longitude,
+      );
+
+      // Validate API response
+      if (!distanceKm.isFinite || distanceKm <= 0) {
+        throw Exception('Invalid distance returned by API');
+      }
+
+      debugPrint('API route distance: $distanceKm km');
+    } catch (e) {
+      debugPrint('Route distance API failed: $e');
+
+      // Use temporary fallback distance
+      distanceKm = 100.0;
+      usingFallbackDistance = true;
+
+      debugPrint('Using fallback distance: 100 km');
+    }
+
+    if (!mounted) return;
+
+    // Inform passenger when fallback is being used
+    if (usingFallbackDistance) {
+      _message(
+        'Route distance unavailable. Temporary estimate: 100 km.',
+      );
+    }
+
+    // STEP 3: Open Vehicle Selection screen
+    final vehicleResult =
+        await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VehicleSelectionScreen(
+          pickupCity: widget.pickupCity,
+          dropCity: _destinationCity,
+          tripType: tripResult['trip_type'],
+          distanceKm: distanceKm,
+        ),
+      ),
+    );
+
+    if (vehicleResult == null || !mounted) return;
+
+    // STEP 4: Return all booking details
+    Navigator.pop(context, {
+      'pickup_latitude': widget.pickupLatitude,
+      'pickup_longitude': widget.pickupLongitude,
+      'pickup_address': widget.pickupAddress,
+      'pickup_city': widget.pickupCity,
+
+      'drop_latitude': _destination.latitude,
+      'drop_longitude': _destination.longitude,
+      'drop_address': _destinationAddress,
+      'drop_city': _destinationCity,
+
+      'distance_km': distanceKm,
+      'using_fallback_distance': usingFallbackDistance,
+
+      ...tripResult,
+      ...vehicleResult,
+    });
+  }
+
+
+  void _message(String value) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(value),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final height = constraints.maxHeight;
+
+            // Compact proportions for different phone sizes.
+            final headerHeight = height * 0.245;
+            final bottomHeight = height * 0.485;
+
+            return Stack(
+              children: [
+                // MAP
+                Positioned(
+                  top: headerHeight,
+                  left: 0,
+                  right: 0,
+                  bottom: bottomHeight,
+                  child: Stack(
+                    children: [
+                      GoogleMap(
+                        initialCameraPosition: CameraPosition(
+                          target: _destination,
+                          zoom: 14,
+                        ),
+                        onMapCreated: (controller) {
+                          _mapController = controller;
+                          controller.animateCamera(
+                            CameraUpdate.newLatLngBounds(
+                              LatLngBounds(
+                                southwest: LatLng(
+                                  _pickup.latitude - 0.012,
+                                  _pickup.longitude - 0.012,
+                                ),
+                                northeast: LatLng(
+                                  _destination.latitude + 0.012,
+                                  _destination.longitude + 0.012,
+                                ),
+                              ),
+                              55,
+                            ),
+                          );
+                        },
+                        onTap: (position) {
+                          _setDestination(position);
+                        },
+                        markers: _markers,
+                        myLocationEnabled: false,
+                        myLocationButtonEnabled: false,
+                        zoomControlsEnabled: false,
+                        compassEnabled: false,
+                        mapToolbarEnabled: false,
+                      ),
+
+                      Positioned(
+                        right: 14,
+                        bottom: 15,
+                        child: FloatingActionButton(
+                          heroTag: 'destination_current_location',
+                          mini: false,
+                          backgroundColor: Colors.white,
+                          elevation: 3,
+                          onPressed: _useCurrentLocation,
+                          child: _loadingLocation
+                              ? const SizedBox(
+                                  height: 21,
+                                  width: 21,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: green,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.my_location,
+                                  color: dark,
+                                  size: 24,
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // HEADER
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: headerHeight,
+                  child: Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.fromLTRB(16, 3, 16, 8),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 57,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: IconButton(
+                                  padding: EdgeInsets.zero,
+                                  onPressed: () => Navigator.pop(context),
+                                  icon: const Icon(
+                                    Icons.arrow_back,
+                                    color: dark,
+                                    size: 27,
+                                  ),
+                                ),
+                              ),
+                              Image.asset(
+                                'assets/images/raahi_assets/brand/raahi_logo.png',
+                                height: 48,
+                                width: 180,
+                                fit: BoxFit.contain,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        const Text(
+                          'Select Destination',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 23,
+                            fontWeight: FontWeight.w900,
+                            color: dark,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Where would you like to go?',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: 48,
+                          child: TextField(
+                            controller: _searchController,
+                            textInputAction: TextInputAction.search,
+                            onSubmitted: (_) => _searchDestination(),
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Search for destination, city or place',
+                              hintStyle: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF858B92),
+                              ),
+                              prefixIcon: const Icon(
+                                Icons.search,
+                                size: 25,
+                                color: Color(0xFF555D66),
+                              ),
+                              suffixIcon: IconButton(
+                                onPressed: _searchDestination,
+                                icon: const Icon(
+                                  Icons.arrow_forward,
+                                  color: green,
+                                ),
+                              ),
+                              contentPadding:
+                                  const EdgeInsets.symmetric(vertical: 8),
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFFDDE1E6),
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFFDDE1E6),
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: const BorderSide(
+                                  color: green,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // BOTTOM PANEL
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: bottomHeight,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(25),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x18000000),
+                          blurRadius: 12,
+                          offset: Offset(0, -3),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 8),
+                        Container(
+                          height: 5,
+                          width: 42,
+                          decoration: BoxDecoration(
+                            color: Color(0xFFADB6C0),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // SELECTED DESTINATION
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 15),
+                          child: Container(
+                            height: 65,
+                            padding: const EdgeInsets.symmetric(horizontal: 11),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF0F4F7),
+                              borderRadius: BorderRadius.circular(15),
+                              border: Border.all(
+                                color: const Color(0xFFE0E6EA),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_on,
+                                  color: Color(0xFFE53950),
+                                  size: 27,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Destination',
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w800,
+                                          color: dark,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '$_destinationAddress, $_destinationCity, MP',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade800,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () {
+                                    _searchController.text =
+                                        _destinationAddress;
+                                    FocusScope.of(context).requestFocus(
+                                      FocusNode(),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.edit,
+                                    color: green,
+                                    size: 23,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // SCROLLABLE DESTINATION CONTENT
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(15, 11, 15, 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle('Popular Destinations', 'View All'),
+                                const SizedBox(height: 7),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _popularCard(
+                                        'Mahakaleshwar\nTemple',
+                                        'assets/images/raahi_assets/destinations/ujjain.png',
+                                        Icons.temple_hindu,
+                                        () => _selectPopular(
+                                          'Mahakaleshwar Temple',
+                                          'Ujjain',
+                                          23.1828,
+                                          75.7682,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                      child: _popularCard(
+                                        'Omkareshwar',
+                                        'assets/images/raahi_assets/destinations/omkareshwar.png',
+                                        Icons.temple_hindu,
+                                        () => _selectPopular(
+                                          'Omkareshwar',
+                                          'Khandwa',
+                                          22.2425,
+                                          76.1511,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                      child: _popularCard(
+                                        'Khatu Shyam',
+                                        null,
+                                        Icons.temple_hindu,
+                                        () => _selectPopular(
+                                          'Khatu Shyam Temple',
+                                          'Sikar',
+                                          27.3645,
+                                          75.4017,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                      child: _popularCard(
+                                        'Baglamukhi',
+                                        null,
+                                        Icons.temple_hindu,
+                                        () => _selectPopular(
+                                          'Baglamukhi Temple',
+                                          'Nalkheda',
+                                          23.9912,
+                                          76.0561,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                _sectionTitle('Recent Searches', null),
+                                _recentRow(
+                                  'Indore',
+                                  'Indore, Madhya Pradesh',
+                                  () => _selectPopular(
+                                    'Indore',
+                                    'Indore',
+                                    22.7196,
+                                    75.8577,
+                                  ),
+                                ),
+                                _recentRow(
+                                  'Dewas',
+                                  'Dewas, Madhya Pradesh',
+                                  () => _selectPopular(
+                                    'Dewas',
+                                    'Dewas',
+                                    22.9676,
+                                    76.0534,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // FIXED CONFIRM BUTTON
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(17, 9, 17, 14),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(
+                                color: Color(0xFFE9ECEF),
+                              ),
+                            ),
+                          ),
+                          child: SizedBox(
+                            width: double.infinity,
+                            height: 54,
+                            child: FilledButton(
+                              onPressed: _confirmDestination,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: navy,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    'Confirm Destination',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Icon(Icons.arrow_forward, size: 24),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title, String? action) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              color: dark,
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+        if (action != null)
+          TextButton(
+            onPressed: () => _message('More destinations coming soon.'),
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'View All →',
+              style: TextStyle(
+                color: green,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _popularCard(
+    String title,
+    String? imagePath,
+    IconData fallbackIcon,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 112,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE7EBEF)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x10000000),
+              blurRadius: 4,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            Expanded(
+              child: imagePath == null
+                  ? Container(
+                      width: double.infinity,
+                      color: const Color(0xFFE9F4F1),
+                      child: Icon(
+                        fallbackIcon,
+                        color: green,
+                        size: 34,
+                      ),
+                    )
+                  : Image.asset(
+                      imagePath,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: const Color(0xFFE9F4F1),
+                        child: Icon(
+                          fallbackIcon,
+                          color: green,
+                          size: 32,
+                        ),
+                      ),
+                    ),
+            ),
+            SizedBox(
+              height: 36,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      height: 1.05,
+                      fontWeight: FontWeight.w800,
+                      color: dark,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _recentRow(
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 53),
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        decoration: const BoxDecoration(
+          border: Border(
+            bottom: BorderSide(color: Color(0xFFE8EBEF)),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF0F4F5),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.access_time,
+                color: dark,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: dark,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right,
+              color: dark,
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\vehicle_selection_screen.dart ==========
+
+
+import 'package:flutter/material.dart';
+
+class VehicleSelectionScreen extends StatefulWidget {
+  final String pickupCity;
+  final String dropCity;
+  final String tripType;
+  final double distanceKm;
+
+  const VehicleSelectionScreen({
+    super.key,
+    required this.pickupCity,
+    required this.dropCity,
+    required this.tripType,
+    required this.distanceKm,
+  });
+
+  @override
+  State<VehicleSelectionScreen> createState() =>
+      _VehicleSelectionScreenState();
+}
+
+class _VehicleSelectionScreenState
+    extends State<VehicleSelectionScreen> {
+  static const Color green = Color(0xFF079B80);
+  static const Color navy = Color(0xFF06465D);
+  static const Color dark = Color(0xFF17202D);
+
+  String selectedVehicle = 'dzire';
+
+  final List<Map<String, dynamic>> vehicles = [
+    {
+      'id': 'dzire',
+      'name': 'Dzire',
+      'image': 'assets/images/raahi_assets/vehicles/dzire.png',
+      'description': 'Sedan • Comfortable & Economical',
+      'seats': '4 + 1',
+      'bags': '2 Bags',
+      'price': '₹1,299',
+    },
+    {
+      'id': 'eeco',
+      'name': 'Eeco',
+      'image': 'assets/images/raahi_assets/vehicles/eeco.png',
+      'description': '7 Seater • Spacious & Budget Friendly',
+      'seats': '7 + 1',
+      'bags': '4 Bags',
+      'price': '₹1,499',
+    },
+    {
+      'id': 'ertiga',
+      'name': 'Ertiga',
+      'image': 'assets/images/raahi_assets/vehicles/ertiga.png',
+      'description': '7 Seater • Family & Group Travel',
+      'seats': '7 + 1',
+      'bags': '4 Bags',
+      'price': '₹1,799',
+    },
+    {
+      'id': 'innova',
+      'name': 'Innova',
+      'image': 'assets/images/raahi_assets/vehicles/innova.png',
+      'description': '7/8 Seater • Premium & Comfortable',
+      'seats': '7 + 1',
+      'bags': '5 Bags',
+      'price': '₹2,499',
+    },
+    {
+      'id': 'urbania',
+      'name': 'Urbania',
+      'image': 'assets/images/raahi_assets/vehicles/urbania.png',
+      'description': '12–17 Seater • Groups & Tours',
+      'seats': '12–17',
+      'bags': '10 Bags',
+      'price': '₹4,999',
+    },
+  ];
+
+  String get tripTypeLabel {
+    switch (widget.tripType) {
+      case 'local':
+        return 'Local Ride';
+      case 'intercity':
+        return 'Intercity Travel';
+      case 'round_trip':
+        return 'Round Trip';
+      case 'religious_tour':
+        return 'Religious Tour';
+      default:
+        return widget.tripType;
+    }
+  }
+
+  void _continue() {
+    Navigator.pop(context, {
+      'vehicle_type': selectedVehicle,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // HEADER
+            SizedBox(
+              height: 133,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 54,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: IconButton(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(
+                                Icons.arrow_back,
+                                size: 27,
+                                color: dark,
+                              ),
+                            ),
+                          ),
+                          Image.asset(
+                            'assets/images/raahi_assets/brand/raahi_logo.png',
+                            width: 190,
+                            height: 48,
+                            fit: BoxFit.contain,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    const Text(
+                      'Select Vehicle',
+                      style: TextStyle(
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                        color: dark,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Choose a vehicle that suits your group and travel plan',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // ROUTE SUMMARY
+            Padding(
+              padding: const EdgeInsets.fromLTRB(17, 5, 17, 12),
+              child: _routeSummary(),
+            ),
+
+            // VEHICLE LIST
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(17, 3, 17, 8),
+                itemCount: vehicles.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: 9),
+                itemBuilder: (context, index) {
+                  return _vehicleCard(vehicles[index]);
+                },
+              ),
+            ),
+
+            // FARE NOTE
+            Padding(
+              padding: const EdgeInsets.fromLTRB(17, 5, 17, 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5F7FA),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: green,
+                      size: 23,
+                    ),
+                    SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        'Fare is an estimated price and may vary based on date, time and demand.',
+                        style: TextStyle(
+                          color: dark,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // CONTINUE BUTTON
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 5, 18, 13),
+              child: SizedBox(
+                width: double.infinity,
+                height: 55,
+                child: FilledButton(
+                  onPressed: _continue,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: navy,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(17),
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'Continue',
+                        style: TextStyle(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Icon(Icons.arrow_forward, size: 25),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _routeSummary() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 13,
+        vertical: 11,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F9FB),
+        border: Border.all(color: const Color(0xFFDDE3E8)),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on,
+                color: green,
+                size: 22,
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  widget.pickupCity,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: dark,
+                  ),
+                ),
+              ),
+              const Icon(Icons.arrow_forward, size: 23),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.location_on,
+                color: Colors.red,
+                size: 22,
+              ),
+              Expanded(
+                child: Text(
+                  widget.dropCity,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: dark,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Edit',
+                  style: TextStyle(
+                    color: green,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 12),
+          Row(
+            children: [
+              const Icon(
+                Icons.alt_route,
+                color: green,
+                size: 19,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  tripTypeLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: dark,
+                  ),
+                ),
+              ),
+              Text(
+                '~ ${widget.distanceKm.toStringAsFixed(0)} km',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: dark,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _vehicleCard(Map<String, dynamic> vehicle) {
+    final bool isSelected = selectedVehicle == vehicle['id'];
+
+    return InkWell(
+      onTap: () {
+        setState(() {
+          selectedVehicle = vehicle['id'];
+        });
+      },
+      borderRadius: BorderRadius.circular(17),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        height: 105,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 7,
+          vertical: 7,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFFF0FCF8)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(
+            color: isSelected
+                ? green
+                : const Color(0xFFDDE1E5),
+            width: isSelected ? 2 : 1.2,
+          ),
+        ),
+        child: Row(
+          children: [
+            // VEHICLE IMAGE
+            SizedBox(
+              width: 112,
+              height: 85,
+              child: Image.asset(
+                vehicle['image'],
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.directions_car,
+                  size: 55,
+                  color: Colors.blueGrey,
+                ),
+              ),
+            ),
+
+            const SizedBox(width: 5),
+
+            // VEHICLE DETAILS
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    vehicle['name'],
+                    style: const TextStyle(
+                      color: dark,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    vehicle['description'],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _detailTag(
+                        Icons.person_outline,
+                        vehicle['seats'],
+                      ),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: _detailTag(
+                          Icons.work_outline,
+                          vehicle['bags'],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // PRICE AND RADIO
+            Container(
+              width: 91,
+              height: 78,
+              padding: const EdgeInsets.only(left: 9),
+              decoration: const BoxDecoration(
+                border: Border(
+                  left: BorderSide(
+                    color: Color(0xFFDDE3E8),
+                  ),
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'From',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  Text(
+                    vehicle['price'],
+                    style: const TextStyle(
+                      color: green,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Icon(
+                    isSelected
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    color: isSelected
+                        ? green
+                        : Colors.blueGrey,
+                    size: 23,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detailTag(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 6,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: const Color(0xFFE1E5E8),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: dark),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10,
+              color: dark,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\fare_estimation_screen.dart ==========
+
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/services/api_service.dart';
+import 'booking_details_screen.dart';
+
+class FareEstimationScreen extends StatefulWidget {
+  final double distanceKm;
+  final String tripType;
+  final String vehicleModel;
+  final Map<String, dynamic> driver;
+  final String pickupAddress;
+  final String dropAddress;
+  final String pickupCity;
+  final String dropCity;
+
+  const FareEstimationScreen({
+    super.key,
+    required this.distanceKm,
+    required this.tripType,
+    required this.vehicleModel,
+    required this.driver,
+    required this.pickupAddress,
+    required this.dropAddress,
+    required this.pickupCity,
+    required this.dropCity,
+  });
+
+  @override
+  State<FareEstimationScreen> createState() =>
+      _FareEstimationScreenState();
+}
+
+class _FareEstimationScreenState
+    extends State<FareEstimationScreen> {
+  bool isLoading = true;
+  String? errorMessage;
+  Map<String, dynamic>? fareData;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFareEstimate();
+  }
+
+  Future<void> _loadFareEstimate() async {
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final result = await ApiService.estimateFare(
+        tripType: widget.tripType,
+        vehicleType: widget.vehicleModel,
+        distanceKm: widget.distanceKm,
+        passengerCount: 1,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        fareData = result;
+        isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        errorMessage =
+            e.toString().replaceFirst('Exception: ', '');
+        isLoading = false;
+      });
+    }
+  }
+
+  String _formatMoney(dynamic value) {
+    final amount = double.tryParse(value.toString());
+
+    if (amount == null) return 'N/A';
+
+    return '₹${amount.toStringAsFixed(2)}';
+  }
+
+  String _formatDistance(dynamic value) {
+    final distance = double.tryParse(value.toString());
+
+    if (distance == null) return 'N/A';
+
+    return '${distance.toStringAsFixed(2)} km';
+  }
+
+  Widget _fareRow(String title, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.textGrey,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: AppColors.textDark,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _locationDetails() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.trip_origin, color: Colors.green, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'PICKUP',
+                      style: TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.pickupAddress,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (widget.pickupCity.isNotEmpty)
+                      Text(
+                        widget.pickupCity,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 9, top: 8, bottom: 8),
+            child: Container(
+              height: 24,
+              width: 1,
+              color: Colors.grey.shade400,
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.location_on, color: Colors.red, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'DROP',
+                      style: TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.dropAddress,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (widget.dropCity.isNotEmpty)
+                      Text(
+                        widget.dropCity,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Fare Estimation'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+      body: isLoading
+          ? const Center(
+              child: CircularProgressIndicator(),
+            )
+          : errorMessage != null
+              ? _errorView()
+              : _fareView(),
+    );
+  }
+
+  Widget _errorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 55,
+              color: Colors.red,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Unable to calculate fare',
+              style: TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              errorMessage ?? 'Something went wrong',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _loadFareEstimate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fareView() {
+    final fare = fareData!;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Selected driver
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                const CircleAvatar(
+                  radius: 25,
+                  child: Icon(Icons.person),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.driver['driver_name']
+                                ?.toString() ??
+                            'Selected Driver',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.driver['vehicle_name']
+                                ?.toString() ??
+                            widget.vehicleModel,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.verified,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Pickup & Drop Details',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          _locationDetails(),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Journey Details',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                _fareRow(
+                  'Trip Type',
+                  widget.tripType.replaceAll('_', ' '),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Vehicle',
+                  widget.vehicleModel.toUpperCase(),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Journey Distance',
+                  _formatDistance(fare['distance_km']),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Fare Breakdown',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                _fareRow(
+                  'Base Fare',
+                  _formatMoney(fare['base_fare']),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Per KM Rate',
+                  '${_formatMoney(fare['per_km_rate'])}/km',
+                ),
+                const Divider(),
+                _fareRow(
+                  'Chargeable Distance',
+                  _formatDistance(
+                    fare['chargeable_distance_km'],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Estimated total
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'Estimated Total Fare',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _formatMoney(fare['estimated_fare']),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Final fare may vary according to applicable charges.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BookingDetailsScreen(
+                      tripType: widget.tripType,
+                      vehicleModel: widget.vehicleModel,
+                      distanceKm: widget.distanceKm,
+                      pickupAddress: widget.pickupAddress,
+                      dropAddress: widget.dropAddress,
+                      pickupCity: widget.pickupCity,
+                      dropCity: widget.dropCity,
+                      estimatedFare: fare['estimated_fare'],
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.event_available),
+              label: const Text('Continue to Booking'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              onPressed: _loadFareEstimate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Recalculate Fare'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\booking_details_screen.dart ==========
+
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/services/api_service.dart';
+
+class BookingDetailsScreen extends StatefulWidget {
+  final String tripType;
+  final String vehicleModel;
+  final double distanceKm;
+  final String pickupAddress;
+  final String dropAddress;
+  final String pickupCity;
+  final String dropCity;
+  final dynamic estimatedFare;
+
+  const BookingDetailsScreen({
+    super.key,
+    required this.tripType,
+    required this.vehicleModel,
+    required this.distanceKm,
+    required this.pickupAddress,
+    required this.dropAddress,
+    required this.pickupCity,
+    required this.dropCity,
+    required this.estimatedFare,
+  });
+
+  @override
+  State<BookingDetailsScreen> createState() => _BookingDetailsScreenState();
+}
+
+class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
+  DateTime? _travelDate;
+  TimeOfDay? _travelTime;
+  DateTime? _returnDate;
+  TimeOfDay? _returnTime;
+  int _passengerCount = 1;
+  final TextEditingController _instructionsController = TextEditingController();
+  bool _isSubmitting = false;
+  Map<String, dynamic>? _bookingResult;
+  String? _errorMessage;
+
+  bool get _isRoundTrip => widget.tripType.toLowerCase() == 'round_trip';
+
+  @override
+  void dispose() {
+    _instructionsController.dispose();
+    super.dispose();
+  }
+
+  DateTime? _combineDateAndTime(DateTime? date, TimeOfDay? time) {
+    if (date == null || time == null) return null;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  Future<void> _selectTravelDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _travelDate ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) setState(() => _travelDate = picked);
+  }
+
+  Future<void> _selectTravelTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _travelTime ?? TimeOfDay.now(),
+    );
+    if (picked != null) setState(() => _travelTime = picked);
+  }
+
+  Future<void> _selectReturnDate() async {
+    final now = _travelDate ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _returnDate ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) setState(() => _returnDate = picked);
+  }
+
+  Future<void> _selectReturnTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _returnTime ?? TimeOfDay.now(),
+    );
+    if (picked != null) setState(() => _returnTime = picked);
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) return 'Select date';
+    return '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}';
+  }
+
+  String _timeLabel(TimeOfDay? value) =>
+      value == null ? 'Select time' : value.format(context);
+
+  int? _readPassengerId(Map<String, dynamic> user) {
+    final candidates = [user['id'], user['user_id'], user['passenger_id']];
+    for (final value in candidates) {
+      if (value is int) return value;
+      if (value is String) {
+        final parsed = int.tryParse(value);
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _submitBooking() async {
+    final scheduledAt = _combineDateAndTime(_travelDate, _travelTime);
+    if (scheduledAt == null) {
+      setState(() => _errorMessage = 'Please select your travel date and time.');
+      return;
+    }
+    if (scheduledAt.isBefore(DateTime.now())) {
+      setState(() => _errorMessage = 'Travel date and time must be in the future.');
+      return;
+    }
+
+    DateTime? returnAt;
+    if (_isRoundTrip) {
+      returnAt = _combineDateAndTime(_returnDate, _returnTime);
+      if (returnAt == null) {
+        setState(() => _errorMessage = 'Please select your return date and time.');
+        return;
+      }
+      if (!returnAt.isAfter(scheduledAt)) {
+        setState(() => _errorMessage = 'Return date and time must be after departure.');
+        return;
+      }
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final user = await ApiService.getCurrentUser();
+      final passengerId = _readPassengerId(user);
+      if (passengerId == null) {
+        throw Exception('Could not find your passenger ID in the login profile. Please share the /auth/me response with support.');
+      }
+
+      final result = await ApiService.createBooking(
+        passengerId: passengerId,
+        tripType: widget.tripType,
+        preferredVehicleType: widget.vehicleModel,
+        pickupCity: widget.pickupCity,
+        dropCity: widget.dropCity,
+        pickupAddress: widget.pickupAddress,
+        dropAddress: widget.dropAddress,
+        distanceKm: widget.distanceKm,
+        scheduledAt: scheduledAt,
+        returnAt: returnAt,
+        passengerCount: _passengerCount,
+        specialInstructions: _instructionsController.text.trim().isEmpty
+            ? null
+            : _instructionsController.text.trim(),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _bookingResult = result;
+        _isSubmitting = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+        _isSubmitting = false;
+      });
+    }
+  }
+
+  Widget _sectionCard({required Widget child}) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: child,
+      );
+
+  Widget _pickerRow({required String title, required String value, required VoidCallback onTap, required IconData icon}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.primary),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(color: AppColors.textGrey, fontSize: 12)),
+              const SizedBox(height: 4),
+              Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ])),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final booking = _bookingResult;
+    if (booking != null) return _successView(booking);
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Booking Details'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Journey', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.trip_origin, color: Colors.green), const SizedBox(width: 10),
+              Expanded(child: Text('${widget.pickupAddress}\n${widget.pickupCity}', style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+            const Padding(padding: EdgeInsets.only(left: 10, top: 8, bottom: 8), child: Icon(Icons.more_vert, size: 18, color: Colors.grey)),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.location_on, color: Colors.red), const SizedBox(width: 10),
+              Expanded(child: Text('${widget.dropAddress}\n${widget.dropCity}', style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+            const Divider(height: 24),
+            Text('Vehicle: ${widget.vehicleModel.toUpperCase()}'),
+            const SizedBox(height: 6),
+            Text('Distance: ${widget.distanceKm.toStringAsFixed(2)} km'),
+            const SizedBox(height: 6),
+            Text('Estimated fare: ₹${widget.estimatedFare}'),
+          ])),
+          const SizedBox(height: 20),
+          const Text('Travel Schedule', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Column(children: [
+            _pickerRow(title: 'Travel date', value: _dateLabel(_travelDate), onTap: _selectTravelDate, icon: Icons.calendar_today),
+            const Divider(height: 1),
+            _pickerRow(title: 'Departure time', value: _timeLabel(_travelTime), onTap: _selectTravelTime, icon: Icons.access_time),
+            if (_isRoundTrip) ...[
+              const Divider(height: 1),
+              _pickerRow(title: 'Return date', value: _dateLabel(_returnDate), onTap: _selectReturnDate, icon: Icons.event_repeat),
+              const Divider(height: 1),
+              _pickerRow(title: 'Return time', value: _timeLabel(_returnTime), onTap: _selectReturnTime, icon: Icons.access_time),
+            ],
+          ])),
+          const SizedBox(height: 20),
+          const Text('Passengers', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Row(children: [
+            const Expanded(child: Text('Number of passengers', style: TextStyle(fontWeight: FontWeight.w600))),
+            IconButton(onPressed: _passengerCount > 1 ? () => setState(() => _passengerCount--) : null, icon: const Icon(Icons.remove_circle_outline)),
+            Text('$_passengerCount', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            IconButton(onPressed: _passengerCount < 12 ? () => setState(() => _passengerCount++) : null, icon: const Icon(Icons.add_circle_outline)),
+          ])),
+          const SizedBox(height: 20),
+          const Text('Special instructions (optional)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _instructionsController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'Any luggage, pickup landmark or other request...',
+              filled: true,
+              fillColor: AppColors.white,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          ),
+          if (_errorMessage != null) ...[
+            const SizedBox(height: 14),
+            Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+          ],
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton(
+              onPressed: _isSubmitting ? null : _submitBooking,
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              child: _isSubmitting
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Confirm Booking Request', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text('Your booking will remain pending until an admin assigns a driver.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textGrey, fontSize: 12)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _successView(Map<String, dynamic> booking) {
+    final bookingId = booking['booking_id'] ?? booking['id'] ?? 'Submitted';
+    final status = booking['status']?.toString().toUpperCase() ?? 'PENDING';
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle, color: Colors.green, size: 76),
+          const SizedBox(height: 18),
+          const Text('Booking Request Submitted', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          Text('Booking ID: $bookingId', style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('Status: $status', style: const TextStyle(color: AppColors.textGrey)),
+          const SizedBox(height: 14),
+          const Text('Your request has been sent. A driver will be assigned after admin confirmation.', textAlign: TextAlign.center),
+          const SizedBox(height: 24),
+          SizedBox(width: double.infinity, child: ElevatedButton(
+            onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+            child: const Text('Back to Home'),
+          )),
+        ],
+      ))),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\available_rides_screen.dart ==========
+
+import 'package:flutter/material.dart';
+import '../../core/constants/app_colors.dart';
+import 'fare_estimation_screen.dart';
+class AvailableRidesScreen extends StatefulWidget {
+    @override
+    State<AvailableRidesScreen> createState() =>
+        _AvailableRidesScreenState();
+    final List<Map<String, dynamic>> drivers;
+
+    final double distanceKm;
+    final String tripType;
+    final String vehicleModel;
+    final String pickupAddress;
+    final String dropAddress;
+    final String pickupCity;
+    final String dropCity;
+
+    const AvailableRidesScreen({
+        super.key,
+        required this.drivers,
+        required this.distanceKm,
+        required this.tripType,
+        required this.vehicleModel,
+        required this.pickupAddress,
+        required this.dropAddress,
+        required this.pickupCity,
+        required this.dropCity,
+    });
+}
+
+class _AvailableRidesScreenState
+    extends State<AvailableRidesScreen> {
+  Map<String, dynamic>? selectedDriver;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text(
+          'Available Rides',
+          style: TextStyle(
+            color: AppColors.primary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        backgroundColor: AppColors.white,
+        iconTheme: const IconThemeData(
+          color: AppColors.primary,
+        ),
+      ),
+      body: widget.drivers.isEmpty
+          ? const Center(
+              child: Text('No available drivers found'),
+            )
+          : Column(
+              children: [
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Text(
+                        '${widget.drivers.length} drivers found near your pickup',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      ...widget.drivers.map(
+                        (driver) => _driverCard(driver),
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (selectedDriver != null)
+                  _continueButton(),
+              ],
+            ),
+    );
+  }
+
+  Widget _driverCard(Map<String, dynamic> driver) {
+    final rating = driver['rating'] ?? 0;
+    final distance = driver['distance_km'] ?? 0;
+   
+
+    final isSelected =
+        selectedDriver?['driver_id'] == driver['driver_id'];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isSelected
+              ? AppColors.primary
+              : Colors.grey.shade200,
+          width: isSelected ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 25,
+                backgroundColor:
+                    AppColors.primary.withValues(alpha: 0.1),
+                child: const Icon(
+                  Icons.person,
+                  color: AppColors.primary,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driver['driver_name']?.toString() ?? 'Driver',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star,
+                          color: Colors.orange,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text('$rating'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              if (isSelected)
+                const Icon(
+                  Icons.check_circle,
+                  color: Colors.green,
+                )
+              else
+                const Icon(
+                  Icons.verified,
+                  color: Colors.green,
+                ),
+            ],
+          ),
+
+          const Divider(height: 24),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.directions_car,
+                color: AppColors.primary,
+                size: 25,
+              ),
+              const SizedBox(width: 10),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driver['vehicle_name']?.toString() ?? 'Vehicle',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      driver['vehicle_type']?.toString() ??
+                          'Unknown type',
+                      style: const TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              Text(
+                '${driver['seating_capacity']} Seats',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.confirmation_number_outlined,
+                size: 18,
+                color: AppColors.textGrey,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  driver['registration_number']?.toString() ??
+                      'Registration unavailable',
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on_outlined,
+                size: 18,
+                color: Colors.green,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${distance.toString()} km from pickup',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => _viewDriver(driver),
+              child: Text(
+                isSelected ? 'View Selected Driver' : 'View Driver',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _viewDriver(Map<String, dynamic> driver) async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DriverDetailsScreen(driver: driver),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+
+    setState(() {
+      selectedDriver = result;
+    });
+  }
+
+  Widget _continueButton() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: AppColors.white,
+      child: SizedBox(
+        width: double.infinity,
+        height: 52,
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                builder: (_) => FareEstimationScreen(
+                    distanceKm: widget.distanceKm,
+                    tripType: widget.tripType,
+                    vehicleModel: widget.vehicleModel,
+                    driver: selectedDriver!,
+                    pickupAddress: widget.pickupAddress,
+                    dropAddress: widget.dropAddress,
+                    pickupCity: widget.pickupCity,
+                    dropCity: widget.dropCity,
+                ),
+                ),
+            );
+            },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Text(
+            'Continue to Fare Estimation',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+// =======================================================
+// DRIVER DETAILS SCREEN
+// =======================================================
+
+class DriverDetailsScreen extends StatelessWidget {
+  final Map<String, dynamic> driver;
+
+  const DriverDetailsScreen({
+    super.key,
+    required this.driver,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+
+      appBar: AppBar(
+        title: const Text('Driver Details'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            CircleAvatar(
+              radius: 45,
+              backgroundColor:
+                  AppColors.primary.withValues(alpha: 0.1),
+              child: const Icon(
+                Icons.person,
+                size: 55,
+                color: AppColors.primary,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            Text(
+              driver['driver_name']?.toString() ?? 'Driver',
+              style: const TextStyle(
+                fontSize: 23,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            const Text(
+              'Driver information',
+              style: TextStyle(color: AppColors.textGrey),
+            ),
+
+            const SizedBox(height: 24),
+
+            _detail(
+              'Vehicle',
+              driver['vehicle_name']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Vehicle Type',
+              driver['vehicle_type']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Registration Number',
+              driver['registration_number']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Rating',
+              driver['rating']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Seating Capacity',
+              '${driver['seating_capacity'] ?? 'N/A'} Seats',
+            ),
+
+            _detail(
+              'Distance from Pickup',
+              '${driver['distance_km'] ?? 'N/A'} km',
+            ),
+
+            const SizedBox(height: 30),
+
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context, driver);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Select This Driver',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detail(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.textGrey,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\core\services\api_service.dart ==========
+
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ApiService {
+  // Physical phone: use your computer's local IPv4 address.
+  // Android emulator: use 10.0.2.2 instead of localhost.
+  static const String baseUrl = 'http://192.168.29.201:8000';
+
+  static Future<Map<String, dynamic>> login({
+    required String phone,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'phone': phone,
+        'password': password,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('access_token', data['access_token']);
+      return data;
+    }
+
+    throw Exception(data['detail'] ?? 'Login failed');
+  }
+
+  static Future<Map<String, dynamic>> register({
+    required String fullName,
+    required String phone,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'full_name': fullName,
+        'phone': phone,
+        'password': password,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('access_token', data['access_token']);
+      return data;
+    }
+
+    throw Exception(data['detail'] ?? 'Registration failed');
+  }
+
+  static Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+  }
+
+  static Future<String?> getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('access_token');
+  }
+
+  static Future<Map<String, dynamic>> getCurrentUser() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('No login session found');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/auth/me'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    if (response.statusCode == 401) {
+      await logout();
+      throw Exception('Session expired. Please login again.');
+    }
+
+    throw Exception('Unable to verify login session');
+  }
+
+  // Estimate ride fare.
+  static Future<Map<String, dynamic>> estimateFare({
+    required String tripType,
+    required String vehicleType,
+    required double distanceKm,
+    int passengerCount = 1,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/fares/estimate'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'trip_type': tripType,
+        'vehicle_type': vehicleType,
+        'distance_km': distanceKm,
+        'passenger_count': passengerCount,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return data as Map<String, dynamic>;
+    }
+
+    throw Exception(data['detail'] ?? 'Fare estimation failed');
+  }
+
+  // Create a passenger booking.
+  static Future<Map<String, dynamic>> createBooking({
+    required int passengerId,
+    required String tripType,
+    required String preferredVehicleType,
+    required String pickupCity,
+    required String dropCity,
+    required String pickupAddress,
+    required String dropAddress,
+    required double distanceKm,
+    required DateTime scheduledAt,
+    DateTime? returnAt,
+    int passengerCount = 1,
+    String? specialInstructions,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/bookings/'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'passenger_id': passengerId,
+        'trip_type': tripType,
+        'preferred_vehicle_type': preferredVehicleType,
+        'pickup_city': pickupCity,
+        'drop_city': dropCity,
+        'pickup_address': pickupAddress,
+        'drop_address': dropAddress,
+        'distance_km': distanceKm,
+        'scheduled_at': scheduledAt.toIso8601String(),
+        'return_at': returnAt?.toIso8601String(),
+        'passenger_count': passengerCount,
+        'special_instructions': specialInstructions,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return data as Map<String, dynamic>;
+    }
+
+    throw Exception(data['detail'] ?? 'Booking creation failed');
+  }
+
+  static Future<List<Map<String, dynamic>>> findNearbyDrivers({
+    required double latitude,
+    required double longitude,
+    required String vehicleType,
+    int passengerCount = 1,
+    double radiusKm = 10,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final uri = Uri.parse('$baseUrl/locations/nearby').replace(
+      queryParameters: {
+        'latitude': latitude.toString(),
+        'longitude': longitude.toString(),
+        'radius_km': radiusKm.toString(),
+        'passenger_count': passengerCount.toString(),
+        'vehicle_type': vehicleType,
+      },
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data as List)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to find nearby drivers'
+          : 'Unable to find nearby drivers',
+    );
+  }
+  // Get all bookings for the logged-in passenger.
+  static Future<List<Map<String, dynamic>>> getMyBookings() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/bookings/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data as List)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to load bookings'
+          : 'Unable to load bookings',
+    );
+  }
+
+  // Get road distance from the backend Google Routes endpoint.
+  // This method is intentionally declared only once.
+  static Future<double> getRouteDistanceKm({
+    required double pickupLatitude,
+    required double pickupLongitude,
+    required double dropLatitude,
+    required double dropLongitude,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/routes/distance'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'pickup_latitude': pickupLatitude,
+            'pickup_longitude': pickupLongitude,
+            'drop_latitude': dropLatitude,
+            'drop_longitude': dropLongitude,
+          }),
+        )
+        .timeout(const Duration(seconds: 12));
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data['distance_km'] as num).toDouble();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Google Routes distance calculation failed'
+          : 'Google Routes distance calculation failed',
+    );
+  }
+  
+  // Get the assigned driver's latest location for a booking.
+  static Future<Map<String, dynamic>> getAssignedDriverLocation({
+    required int bookingId,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/locations/booking/$bookingId/driver'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to get driver location'
+          : 'Unable to get driver location',
+    );
+  }
+
+  
+  // Cancel a pending passenger booking.
+  static Future<Map<String, dynamic>> cancelBooking({
+      required int bookingId,
+    }) async {
+      final token = await getToken();
+
+      if (token == null || token.isEmpty) {
+        throw Exception('Please login first');
+      }
+
+      final response = await http.patch(
+        Uri.parse('$baseUrl/bookings/$bookingId/status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'booking_status': 'cancelled',
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return data as Map<String, dynamic>;
+      }
+
+      throw Exception(
+        data is Map
+            ? data['detail'] ?? 'Unable to cancel booking'
+            : 'Unable to cancel booking',
+      );
+  }
+
+
+  // Register Firebase device token with backend.
+  static Future<void> registerDeviceToken(String fcmToken) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/notifications/device-token'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'token': fcmToken,
+        'platform': 'android',
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Device token registration failed: ${response.body}');
+    }
+  }
+
+  // Remove Firebase device token on logout.
+  static Future<void> removeDeviceToken(String fcmToken) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) return;
+
+    final uri = Uri.parse('$baseUrl/notifications/device-token')
+        .replace(queryParameters: {'token': fcmToken});
+
+    final response = await http.delete(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Device token removal failed: ${response.body}');
+    }
+  }
+
+  // Fetch passenger notifications.
+  static Future<List<Map<String, dynamic>>> getNotifications() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/notifications/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as List;
+      return data
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception('Unable to load notifications');
+  }
+
+  // Mark one notification as read.
+  static Future<void> markNotificationRead(int notificationId) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/notifications/$notificationId/read'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Unable to mark notification as read');
+    }
+  }
+
+  // Mark all notifications as read.
+  static Future<void> markAllNotificationsRead() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/notifications/read-all'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Unable to mark all notifications as read');
+    }
+  }
+
+
+  // Update passenger profile.
+  static Future<Map<String, dynamic>> updateProfile({
+    required String fullName,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/auth/me'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'full_name': fullName.trim(),
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Profile update failed'
+          : 'Profile update failed',
+    );
+  }
+
+  // Submit a driver review after completing a trip.
+  static Future<Map<String, dynamic>> submitDriverReview({
+    required int bookingId,
+    required int rating,
+    String? review,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/reviews/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'booking_id': bookingId,
+        'rating': rating,
+        'review': review?.trim().isEmpty == true
+            ? null
+            : review?.trim(),
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to submit review'
+          : 'Unable to submit review',
+    );
+  }
+
+  // Get the review submitted for a particular booking.
+  // Get the review submitted for a particular booking.
+static Future<Map<String, dynamic>?> getBookingReview({
+    required int bookingId,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final uri = Uri.parse('$baseUrl/reviews/booking/$bookingId');
+
+    print('⭐ Calling review API: $uri');
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 10));
+
+    print('⭐ Review API status: ${response.statusCode}');
+    print('⭐ Review API body: ${response.body}');
+
+    if (response.statusCode == 200) {
+      final body = response.body.trim();
+
+      if (body.isEmpty || body == 'null') {
+        return null;
+      }
+
+      final data = jsonDecode(body);
+      return Map<String, dynamic>.from(data);
+    }
+
+    final body = response.body.trim();
+    throw Exception(
+      body.isNotEmpty
+          ? (jsonDecode(body) is Map
+              ? jsonDecode(body)['detail'] ?? 'Unable to load review'
+              : 'Unable to load review')
+          : 'Unable to load review',
+    );
+  }
+}

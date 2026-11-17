@@ -1,0 +1,3560 @@
+﻿RAAHI BACKEND SOURCE CODE
+
+
+==================================================
+FILE: app/models.py
+==================================================
+
+
+import enum
+from datetime import datetime
+from sqlalchemy import Float, DateTime
+from datetime import datetime, timezone
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    CheckConstraint,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index, UniqueConstraint, func
+from app.db import Base
+
+
+# -------------------------
+# ENUMS
+# -------------------------
+
+class UserRole(str, enum.Enum):
+    PASSENGER = "passenger"
+    DRIVER = "driver"
+    AGENCY = "agency"
+    ADMIN = "admin"
+
+
+class VerificationStatus(str, enum.Enum):
+    PENDING = "pending"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class BookingStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DRIVER_ASSIGNED = "driver_assigned"
+    ONGOING = "ongoing"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    
+class AgencyOfferStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    
+
+class TripType(str, enum.Enum):
+    LOCAL = "local"
+    INTERCITY = "intercity"
+    ROUND_TRIP = "round_trip"
+    RELIGIOUS_TOUR = "religious_tour"
+
+
+
+# -------------------------
+# USERS TABLE
+# -------------------------
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    full_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(String(150), unique=True, nullable=True)
+
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role"),
+        default=UserRole.PASSENGER,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    driver_profile: Mapped["Driver | None"] = relationship(
+        back_populates="user",
+        uselist=False,
+    )
+    
+    agency_profile: Mapped["Agency | None"] = relationship(
+    back_populates="user",
+    uselist=False,
+)
+    
+    hashed_password: Mapped[str | None] = mapped_column(
+    String(255),
+    nullable=True
+    )
+
+
+# -------------------------
+# AGENCIES TABLE
+# -------------------------
+
+class Agency(Base):
+    __tablename__ = "agencies"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False
+    )
+
+    business_name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False
+    )
+
+    registration_number: Mapped[str | None] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=True
+    )
+
+    business_email: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True
+    )
+
+    business_address: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    city: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        Enum(VerificationStatus, name="verification_status"),
+        default=VerificationStatus.PENDING,
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    user: Mapped["User"] = relationship(
+        back_populates="agency_profile"
+    )
+
+    drivers: Mapped[list["Driver"]] = relationship(
+        back_populates="agency"
+    )
+
+# -------------------------
+# DRIVERS TABLE
+# -------------------------
+
+class Driver(Base):
+    __tablename__ = "drivers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False,
+    )
+
+    license_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        Enum(VerificationStatus, name="verification_status"),
+        default=VerificationStatus.PENDING,
+        nullable=False,
+    )
+
+    rating: Mapped[float] = mapped_column(Float, default=5.0)
+    is_available: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped["User"] = relationship(back_populates="driver_profile")
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="driver")
+
+    latitude: Mapped[float | None] = mapped_column(
+    Float,
+    nullable=True
+    )
+
+    longitude: Mapped[float | None] = mapped_column(
+    Float,
+    nullable=True
+    )
+
+    location_updated_at: Mapped[datetime | None] = mapped_column(
+    DateTime(timezone=True),
+    nullable=True
+    )
+    
+    agency_id: Mapped[int | None] = mapped_column(
+    ForeignKey("agencies.id"),
+    nullable=True,
+    index=True
+    )
+
+    agency: Mapped["Agency | None"] = relationship(
+        back_populates="drivers"
+    )
+# -------------------------
+# VEHICLES TABLE
+# -------------------------
+
+class Vehicle(Base):
+    __tablename__ = "vehicles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    driver_id: Mapped[int] = mapped_column(
+        ForeignKey("drivers.id"),
+        nullable=False,
+    )
+
+    vehicle_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    vehicle_type: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    registration_number: Mapped[str] = mapped_column(
+        String(20),
+        unique=True,
+        nullable=False,
+    )
+
+    seating_capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    driver: Mapped["Driver"] = relationship(back_populates="vehicles")
+
+
+# -------------------------
+# RIDE ROUTES TABLE
+# -------------------------
+
+class RideRoute(Base):
+    __tablename__ = "ride_routes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    pickup_city: Mapped[str] = mapped_column(String(100), nullable=False)
+    drop_city: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    pickup_address: Mapped[str] = mapped_column(Text, nullable=False)
+    drop_address: Mapped[str] = mapped_column(Text, nullable=False)
+
+    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    bookings: Mapped[list["Booking"]] = relationship(
+        back_populates="route"
+    )
+    pickup_latitude: Mapped[float | None] = mapped_column(
+    Float, nullable=True
+    )
+
+    pickup_longitude: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+
+# -------------------------
+# BOOKINGS TABLE
+# -------------------------
+
+class Booking(Base):
+    __tablename__ = "bookings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    passenger_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    driver_id: Mapped[int | None] = mapped_column(
+        ForeignKey("drivers.id"),
+        nullable=True,
+    )
+
+    vehicle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vehicles.id"),
+        nullable=True,
+    )
+
+    preferred_vehicle_type: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    route_id: Mapped[int] = mapped_column(
+        ForeignKey("ride_routes.id"),
+        nullable=False,
+    )
+
+
+    route_id: Mapped[int] = mapped_column(
+        ForeignKey("ride_routes.id"),
+        nullable=False,
+    )
+
+    booking_status: Mapped[BookingStatus] = mapped_column(
+        Enum(BookingStatus, name="booking_status"),
+        default=BookingStatus.PENDING,
+        nullable=False,
+    )
+
+    estimated_fare: Mapped[float] = mapped_column(Float, nullable=False)
+    final_fare: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    
+    
+    
+    trip_type: Mapped[TripType] = mapped_column(
+    Enum(
+        TripType,
+        name="trip_type",
+        values_callable=lambda enum_cls: [
+            item.value for item in enum_cls
+        ],
+    ),
+    default=TripType.LOCAL,
+    server_default="local",
+    nullable=False,
+)
+
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    return_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    passenger_count: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
+
+    special_instructions: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+   
+    started_at: Mapped[datetime | None] = mapped_column(
+    DateTime(timezone=True),
+    nullable=True
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    actual_distance_km: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True
+    )
+    
+    route: Mapped["RideRoute"] = relationship(
+        back_populates="bookings"
+    )
+    
+    
+
+# -------------------------
+# NOTIFICATIONS 
+
+# -------------------------
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    booking_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=True
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False
+    )
+
+    message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    notification_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False
+    )
+
+    is_read: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+# -------------------------
+# AGENCY BOOKING OFFERS
+# -------------------------
+
+class AgencyBookingOffer(Base):
+    __tablename__ = "agency_booking_offers"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=False,
+        index=True
+    )
+
+    agency_id: Mapped[int] = mapped_column(
+        ForeignKey("agencies.id"),
+        nullable=False,
+        index=True
+    )
+
+    status: Mapped[AgencyOfferStatus] = mapped_column(
+        Enum(
+            AgencyOfferStatus,
+            name="agency_offer_status",
+            values_callable=lambda enum_cls: [
+                item.value for item in enum_cls
+            ]
+        ),
+        default=AgencyOfferStatus.PENDING,
+        nullable=False
+    )
+
+    offered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    responded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    
+    
+
+class DriverBookingRequest(Base):
+    __tablename__ = "driver_booking_requests"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "booking_id",
+            "driver_id",
+            name="uq_booking_driver_request"
+        ),
+        Index(
+            "ix_driver_booking_request_expiry",
+            "status",
+            "expires_at"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    booking_id = Column(
+        Integer,
+        ForeignKey("bookings.id"),
+        nullable=False
+    )
+
+    driver_id = Column(
+        Integer,
+        ForeignKey("drivers.id"),
+        nullable=False
+    )
+
+    status = Column(
+        String(20),
+        nullable=False,
+        default="pending"
+    )
+
+    offered_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now()
+    )
+
+    expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False
+    )
+
+    responded_at = Column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+
+class DeviceToken(Base):
+    __tablename__ = "device_tokens"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    token: Mapped[str] = mapped_column(
+        String(500),
+        unique=True,
+        nullable=False
+    )
+
+    platform: Mapped[str] = mapped_column(
+        String(20),
+        default="android",
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+class DriverReview(Base):
+    __tablename__ = "driver_reviews"
+
+    __table_args__ = (
+        UniqueConstraint("booking_id", name="uq_driver_review_booking"),
+        CheckConstraint(
+            "rating >= 1 AND rating <= 5",
+            name="ck_driver_review_rating"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    booking_id: Mapped[int] = mapped_column(
+        ForeignKey("bookings.id"),
+        nullable=False,
+        index=True
+    )
+
+    passenger_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+
+    driver_id: Mapped[int] = mapped_column(
+        ForeignKey("drivers.id"),
+        nullable=False,
+        index=True
+    )
+
+    rating: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False
+    )
+
+    review: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+
+==================================================
+FILE: app/schemas.py
+==================================================
+
+
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.models import TripType, BookingStatus
+from app.models import TripType, BookingStatus, VerificationStatus
+from app.models import AgencyOfferStatus
+
+
+class UserCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=20)
+    email: EmailStr | None = None
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=150)
+
+class UserResponse(BaseModel):
+    id: int
+    full_name: str
+    phone: str
+    email: str | None
+    role: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+    
+    
+
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
+
+
+class DriverRegistrationCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=15)
+    email: EmailStr | None = None
+    password: str = Field(min_length=8, max_length=128)
+    license_number: str = Field(min_length=5, max_length=50)
+
+
+class DriverResponse(BaseModel):
+    id: int
+    user_id: int
+    license_number: str
+    verification_status: str
+    rating: float
+    is_available: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DriverAvailabilityUpdate(BaseModel):
+    is_available: bool
+
+class DriverVerificationUpdate(BaseModel):
+    verification_status: VerificationStatus
+
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class VehicleCreate(BaseModel):
+    driver_id: int
+    vehicle_name: str = Field(min_length=2, max_length=100)
+    vehicle_type: str = Field(min_length=2, max_length=50)
+    registration_number: str = Field(min_length=5, max_length=20)
+    seating_capacity: int = Field(ge=1, le=50)
+
+
+class VehicleUpdate(BaseModel):
+    vehicle_name: str | None = Field(default=None, max_length=100)
+    vehicle_type: str | None = Field(default=None, max_length=50)
+    seating_capacity: int | None = Field(default=None, ge=1, le=50)
+    is_active: bool | None = None
+
+
+class VehicleResponse(BaseModel):
+    id: int
+    driver_id: int
+    vehicle_name: str
+    vehicle_type: str
+    registration_number: str
+    seating_capacity: int
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BookingCreate(BaseModel):
+    passenger_id: int
+
+    trip_type: TripType
+    preferred_vehicle_type: str = Field(
+    pattern="^(dzire|eeco|ertiga|innova|urbania)$"
+    )
+
+    pickup_city: str = Field(min_length=2, max_length=100)
+    drop_city: str = Field(min_length=2, max_length=100)
+
+    pickup_address: str = Field(min_length=3)
+    drop_address: str = Field(min_length=3)
+
+    distance_km: float = Field(gt=0, le=2000)
+
+    scheduled_at: datetime
+    return_at: datetime | None = None
+
+    passenger_count: int = Field(default=1, ge=1, le=50)
+    special_instructions: str | None = None
+    pickup_latitude: float | None = None
+    pickup_longitude: float | None = None
+
+    @model_validator(mode="after")
+    def validate_return_trip(self):
+        if self.trip_type == TripType.ROUND_TRIP:
+            if self.return_at is None:
+                raise ValueError(
+                    "Return date and time are required for round trips"
+                )
+
+            if self.return_at <= self.scheduled_at:
+                raise ValueError(
+                    "Return time must be after pickup time"
+                )
+
+        elif self.return_at is not None:
+            raise ValueError(
+                "Return time is only allowed for round trips"
+            )
+
+        return self
+
+
+
+class RideRouteResponse(BaseModel):
+    id: int
+    pickup_city: str
+    drop_city: str
+    pickup_address: str
+    drop_address: str
+    distance_km: float | None
+
+    model_config = ConfigDict(from_attributes=True)
+    
+class BookingResponse(BaseModel):
+    id: int
+    passenger_id: int
+    driver_id: int | None
+    vehicle_id: int | None
+    preferred_vehicle_type: str | None = Field(
+    default=None,
+    pattern="^(dzire|eeco|ertiga|innova|urbania)$"
+    )
+    route_id: int
+    route: RideRouteResponse
+    booking_status: BookingStatus
+    trip_type: TripType
+
+    estimated_fare: float
+    final_fare: float | None
+
+    scheduled_at: datetime | None
+    return_at: datetime | None
+    passenger_count: int
+    special_instructions: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BookingAssignment(BaseModel):
+    driver_id: int
+    vehicle_id: int
+
+
+
+class BookingStatusUpdate(BaseModel):
+    booking_status: BookingStatus
+
+class DriverBookingAccept(BaseModel):
+    vehicle_id: int
+    
+from pydantic import BaseModel, ConfigDict
+from datetime import datetime
+
+
+
+class TripResponse(BaseModel):
+    id: int
+    passenger_id: int
+    driver_id: int | None
+    vehicle_id: int | None
+    route_id: int
+
+    booking_status: BookingStatus
+    trip_type: TripType
+
+    estimated_fare: float
+    final_fare: float | None
+
+    scheduled_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    actual_distance_km: float | None
+
+    passenger_count: int
+    created_at: datetime
+
+    pickup_city: str
+    drop_city: str
+    pickup_address: str
+    drop_address: str
+    distance_km: float
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TripCompletionRequest(BaseModel):
+    actual_distance_km: float = Field(
+        gt=0,
+        le=3000
+    )
+
+    
+from pydantic import BaseModel, Field
+
+
+class DriverLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class NearbyDriverResponse(BaseModel):
+    driver_id: int
+    driver_name: str
+    vehicle_id: int
+    vehicle_name: str
+    vehicle_type: str
+    registration_number: str
+    seating_capacity: int
+    rating: float
+    latitude: float
+    longitude: float
+    distance_km: float
+    
+    
+
+from pydantic import BaseModel, Field
+from app.models import TripType
+
+
+class FareEstimateRequest(BaseModel):
+    trip_type: TripType
+
+    vehicle_type: str = Field(
+        min_length=2,
+        max_length=50
+    )
+
+    distance_km: float = Field(
+        gt=0,
+        le=2000
+    )
+
+    passenger_count: int = Field(
+        default=1,
+        ge=1,
+        le=50
+    )
+
+
+class FareEstimateResponse(BaseModel):
+    trip_type: TripType
+    distance_km: float
+    chargeable_distance_km: float
+    base_fare: float
+    per_km_rate: float
+    estimated_fare: float
+    currency: str = "INR"
+
+    
+    
+    
+from pydantic import BaseModel, Field
+
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=150)
+    phone: str = Field(min_length=10, max_length=15)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    phone: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    role: str
+    
+    
+
+class AssignedDriverLocationResponse(BaseModel):
+    booking_id: int
+    driver_id: int
+    driver_name: str
+    vehicle_id: int
+    vehicle_name: str
+    vehicle_type: str
+    latitude: float
+    longitude: float
+    location_updated_at: datetime
+
+
+
+class NotificationResponse(BaseModel):
+    id: int
+    user_id: int
+    booking_id: int | None
+    title: str
+    message: str
+    notification_type: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+
+class AgencyRegistrationCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=10, max_length=15)
+    email: EmailStr | None = None
+    password: str = Field(min_length=8, max_length=128)
+
+    business_name: str = Field(min_length=2, max_length=150)
+    registration_number: str | None = Field(
+        default=None,
+        max_length=100
+    )
+    business_email: EmailStr | None = None
+    business_address: str = Field(min_length=5)
+    city: str = Field(min_length=2, max_length=100)
+
+
+class AgencyResponse(BaseModel):
+    id: int
+    user_id: int
+    business_name: str
+    registration_number: str | None
+    business_email: str | None
+    business_address: str
+    city: str
+    verification_status: VerificationStatus
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgencyVerificationUpdate(BaseModel):
+    verification_status: VerificationStatus
+
+
+
+class AgencyOfferCreate(BaseModel):
+    agency_id: int = Field(gt=0)
+
+
+class AgencyOfferResponse(BaseModel):
+    id: int
+    booking_id: int
+    agency_id: int
+    status: AgencyOfferStatus
+    offered_at: datetime
+    responded_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class AgencyOfferRespond(BaseModel):
+    status: AgencyOfferStatus
+    
+    
+class DriverReviewCreate(BaseModel):
+    booking_id: int = Field(gt=0)
+    rating: int = Field(ge=1, le=5)
+    review: str | None = Field(default=None, max_length=1000)
+
+
+class DriverReviewResponse(BaseModel):
+    id: int
+    booking_id: int
+    passenger_id: int
+    driver_id: int
+    rating: int
+    review: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+    
+
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+
+
+class DriverBookingRequestResponse(BaseModel):
+    id: int
+    booking_id: int
+    driver_id: int
+    status: str
+    offered_at: datetime
+    expires_at: datetime
+    responded_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DriverBookingRequestAction(BaseModel):
+    vehicle_id: int | None = None
+
+
+
+==================================================
+FILE: app/db.py
+==================================================
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=3,
+    max_overflow=2,
+)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autocommit=False,
+    autoflush=False,
+)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+==================================================
+FILE: app/main.py
+==================================================
+
+
+from fastapi import FastAPI
+
+from app.api.routes.users import router as users_router
+from app.api.routes.drivers import router as drivers_router
+from app.api.routes.vehicles import router as vehicles_router
+from app.api.routes.bookings import router as bookings_router
+from app.api.routes import trips
+from app.api.routes import locations
+from app.api.routes import fares
+from app.api.routes import auth
+from app.api.routes import notifications
+from app.api.routes import agencies
+from app.api.routes import google_routes
+from app.api.routes import earnings
+from app.api.routes import reviews
+
+
+
+app = FastAPI(
+    title="Regional Mobility Platform",
+    description="Taxi booking and mobility marketplace API",
+    version="1.0.0"
+)
+
+app.include_router(users_router)
+app.include_router(drivers_router)
+app.include_router(vehicles_router)
+app.include_router(bookings_router)
+app.include_router(trips.router)
+app.include_router(locations.router)
+app.include_router(fares.router)
+app.include_router(auth.router)
+app.include_router(notifications.router)
+app.include_router(agencies.router)
+app.include_router(google_routes.router)
+app.include_router(earnings.router)
+app.include_router(reviews.router)     
+@app.get("/")
+def root():
+    return {
+        "message": "Regional Mobility API is running"
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy"
+    }
+
+
+
+==================================================
+FILE: app/api/routes/auth.py
+==================================================
+
+import jwt
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.models import User, UserRole
+from app.schemas import (
+    RegisterRequest,
+    LoginRequest,
+    TokenResponse,
+    ProfileUpdateRequest,
+)
+from app.core.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+)
+from app.core.config import settings
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["Authentication"]
+)
+
+bearer_scheme = HTTPBearer()
+
+
+@router.post("/register", response_model=TokenResponse)
+def register_user(
+    data: RegisterRequest,
+    db: Session = Depends(get_db)
+):
+    existing_user = db.execute(
+        select(User).where(User.phone == data.phone)
+    ).scalar_one_or_none()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Phone number is already registered"
+        )
+
+    user = User(
+        full_name=data.full_name,
+        phone=data.phone,
+        role=UserRole.PASSENGER,
+        hashed_password=hash_password(data.password),
+        is_active=True,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(
+        user.id,
+        user.role.value
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "role": user.role.value,
+    }
+
+
+@router.post("/login", response_model=TokenResponse)
+def login_user(
+    data: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    user = db.execute(
+        select(User).where(User.phone == data.phone)
+    ).scalar_one_or_none()
+
+    if (
+        not user
+        or not user.hashed_password
+        or not verify_password(data.password, user.hashed_password)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect phone number or password"
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive"
+        )
+
+    token = create_access_token(
+        user.id,
+        user.role.value
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "role": user.role.value,
+    }
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+
+        user_id = int(payload["sub"])
+
+    except (jwt.InvalidTokenError, KeyError, ValueError, TypeError):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
+
+    user = db.get(User, user_id)
+
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found or inactive"
+        )
+
+    return user
+
+
+def require_roles(*allowed_roles: UserRole):
+    def role_checker(
+        current_user: User = Depends(get_current_user)
+    ):
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to access this resource"
+            )
+
+        return current_user
+
+    return role_checker
+
+
+@router.get("/me")
+def get_my_profile(
+    current_user: User = Depends(get_current_user)
+):
+    return {
+        "id": current_user.id,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "role": current_user.role.value,
+    }
+    
+    
+@router.patch("/me")
+def update_my_profile(
+    data: ProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    current_user.full_name = data.full_name.strip()
+
+    db.commit()
+    db.refresh(current_user)
+
+    return {
+        "id": current_user.id,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "role": current_user.role.value,
+    }
+
+
+==================================================
+FILE: app/api/routes/users.py
+==================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.models import User, UserRole
+from app.schemas import UserResponse
+from app.api.routes.auth import get_current_user, require_roles
+
+
+router = APIRouter(
+    prefix="/users",
+    tags=["Users"]
+)
+
+
+# Get one user: Own profile or admin access
+@router.get("/{user_id}", response_model=UserResponse)
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = db.query(User).filter(
+        User.id == user_id
+    ).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    if (
+        current_user.id != user_id
+        and current_user.role != UserRole.ADMIN
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own profile"
+        )
+
+    return user
+
+
+# Admin only: Get all users
+@router.get("/", response_model=list[UserResponse])
+def get_all_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.ADMIN)
+    )
+):
+    return (
+        db.query(User)
+        .order_by(User.id.desc())
+        .limit(100)
+        .all()
+    )
+
+
+
+==================================================
+FILE: app/api/routes/locations.py
+==================================================
+
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+
+from app.schemas import (
+    DriverLocationUpdate,
+    NearbyDriverResponse,
+    AssignedDriverLocationResponse,
+)
+
+from app.api.routes.auth import require_roles
+
+from app.models import (
+    Booking,
+    BookingStatus,
+    Driver,
+    Vehicle,
+    User,
+    UserRole,
+    VerificationStatus,
+)
+
+
+router = APIRouter(
+    prefix="/locations",
+    tags=["Driver Location Management"]
+)
+
+
+# ============================================================
+# 1. DRIVER UPDATES THEIR OWN LIVE LOCATION
+# ============================================================
+
+@router.patch("/driver/{driver_id}")
+def update_driver_location(
+    driver_id: int,
+    location: DriverLocationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.DRIVER)
+    )
+):
+    driver = db.query(Driver).filter(
+        Driver.id == driver_id,
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(
+            status_code=404,
+            detail="Your driver profile was not found"
+        )
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver must be verified before updating location"
+        )
+
+    if not driver.is_available:
+        raise HTTPException(
+            status_code=400,
+            detail="Driver must be online to update location"
+        )
+
+    driver.latitude = location.latitude
+    driver.longitude = location.longitude
+
+    driver.location_updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(driver)
+
+    return {
+        "message": "Driver location updated successfully",
+        "driver_id": driver.id,
+        "latitude": driver.latitude,
+        "longitude": driver.longitude,
+        "location_updated_at": driver.location_updated_at
+    }
+
+
+# ============================================================
+# 2. PASSENGER TRACKS ASSIGNED DRIVER
+# ============================================================
+
+@router.get(
+    "/booking/{booking_id}/driver",
+    response_model=AssignedDriverLocationResponse
+)
+def get_assigned_driver_location(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.PASSENGER, UserRole.ADMIN)
+    )
+):
+    booking = db.get(Booking, booking_id)
+
+    if not booking:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    # Passenger can track only their own booking.
+    if (
+        current_user.role == UserRole.PASSENGER
+        and booking.passenger_id != current_user.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot track another passenger's booking"
+        )
+
+    if booking.booking_status not in [
+        BookingStatus.DRIVER_ASSIGNED,
+        BookingStatus.ONGOING
+    ]:
+        raise HTTPException(
+            status_code=400,
+            detail="Driver tracking is available only for assigned or ongoing trips"
+        )
+
+    if not booking.driver_id:
+        raise HTTPException(
+            status_code=404,
+            detail="No driver assigned"
+        )
+
+    driver = db.get(Driver, booking.driver_id)
+
+    if not driver:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver not found"
+        )
+
+    if driver.latitude is None or driver.longitude is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver location is not available yet"
+        )
+
+    if driver.location_updated_at is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver has not shared their location"
+        )
+
+    now = datetime.now(timezone.utc)
+    updated_at = driver.location_updated_at
+
+    # Handle timezone-naive datetime.
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+    if (now - updated_at).total_seconds() > 300:
+        raise HTTPException(
+            status_code=409,
+            detail="Driver location is outdated"
+        )
+
+    user = db.get(User, driver.user_id)
+    vehicle = db.get(Vehicle, booking.vehicle_id)
+
+    if not user or not vehicle:
+        raise HTTPException(
+            status_code=404,
+            detail="Driver or assigned vehicle information not found"
+        )
+
+    return {
+        "booking_id": booking.id,
+        "driver_id": driver.id,
+        "driver_name": user.full_name,
+        "vehicle_id": vehicle.id,
+        "vehicle_name": vehicle.vehicle_name,
+        "vehicle_type": vehicle.vehicle_type,
+        "latitude": driver.latitude,
+        "longitude": driver.longitude,
+        "location_updated_at": driver.location_updated_at
+    }
+
+
+# ============================================================
+# 3. FIND NEARBY AVAILABLE DRIVERS
+# ============================================================
+
+@router.get(
+    "/nearby",
+    response_model=list[NearbyDriverResponse]
+)
+def find_nearby_drivers(
+    latitude: float = Query(ge=-90, le=90),
+    longitude: float = Query(ge=-180, le=180),
+    radius_km: float = Query(default=10, gt=0, le=100),
+    passenger_count: int = Query(default=1, ge=1, le=50),
+    vehicle_type: str | None = Query(default=None),
+
+    db: Session = Depends(get_db),
+
+    current_user: User = Depends(
+        require_roles(UserRole.PASSENGER, UserRole.ADMIN)
+    )
+):
+
+    # Validate that coordinates are within valid geographic ranges.
+    if not (-90 <= latitude <= 90):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid latitude"
+        )
+
+    if not (-180 <= longitude <= 180):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid longitude"
+        )
+
+    # SQLAlchemy text() uses :parameter syntax.
+    sql = text("""
+        SELECT
+            d.id AS driver_id,
+            u.full_name AS driver_name,
+
+            v.id AS vehicle_id,
+            v.vehicle_name,
+            v.vehicle_type,
+            v.registration_number,
+            v.seating_capacity,
+
+            d.rating,
+            d.latitude,
+            d.longitude,
+
+            extensions.ST_Distance(
+                extensions.ST_SetSRID(
+                    extensions.ST_MakePoint(
+                        d.longitude,
+                        d.latitude
+                    ),
+                    4326
+                )::extensions.geography,
+
+                extensions.ST_SetSRID(
+                    extensions.ST_MakePoint(
+                        :longitude,
+                        :latitude
+                    ),
+                    4326
+                )::extensions.geography
+            ) / 1000.0 AS distance_km
+
+        FROM drivers d
+
+        JOIN users u
+            ON u.id = d.user_id
+
+        JOIN vehicles v
+            ON v.driver_id = d.id
+
+        WHERE
+
+            d.is_available = TRUE
+
+            AND d.verification_status = 'VERIFIED'
+
+            AND u.is_active = TRUE
+
+            AND v.is_active = TRUE
+
+            AND d.latitude IS NOT NULL
+
+            AND d.longitude IS NOT NULL
+
+            -- Driver location must be updated within 5 minutes.
+            AND d.location_updated_at >=
+                NOW() - INTERVAL '5 minutes'
+
+            -- Vehicle must have enough seats.
+            AND v.seating_capacity >= :passenger_count
+
+            -- Optional vehicle type filter.
+            AND (
+                CAST(:vehicle_type AS TEXT) IS NULL
+                OR LOWER(v.vehicle_type) =
+                   LOWER(CAST(:vehicle_type AS TEXT))
+            )
+
+            -- Search drivers within the selected radius.
+            AND extensions.ST_DWithin(
+
+                extensions.ST_SetSRID(
+                    extensions.ST_MakePoint(
+                        d.longitude,
+                        d.latitude
+                    ),
+                    4326
+                )::extensions.geography,
+
+                extensions.ST_SetSRID(
+                    extensions.ST_MakePoint(
+                        :longitude,
+                        :latitude
+                    ),
+                    4326
+                )::extensions.geography,
+
+                :radius_m
+            )
+
+        ORDER BY distance_km ASC
+
+        LIMIT 50
+    """)
+
+    result = db.execute(
+        sql,
+        {
+            "longitude": longitude,
+            "latitude": latitude,
+            "passenger_count": passenger_count,
+            "vehicle_type": vehicle_type,
+            "radius_m": radius_km * 1000,
+        }
+    )
+
+    drivers = [
+        dict(row)
+        for row in result.mappings().all()
+    ]
+
+    return drivers
+
+
+
+
+==================================================
+FILE: app/api/routes/fares.py
+==================================================
+
+
+from fastapi import APIRouter, HTTPException
+from app.core.pricing import calculate_estimated_fare
+from app.schemas import (
+    FareEstimateRequest,
+    FareEstimateResponse
+)
+
+router = APIRouter(
+    prefix="/fares",
+    tags=["Fare Estimation"]
+)
+
+# Initial fare configuration (INR)
+VEHICLE_RATES = {
+    "dzire": {"base_fare": 100, "per_km": 12},
+    "eeco": {"base_fare": 100, "per_km": 11},
+    "ertiga": {"base_fare": 150, "per_km": 15},
+    "innova": {"base_fare": 200, "per_km": 18},
+    "urbania": {"base_fare": 500, "per_km": 25},
+}
+
+TRIP_MULTIPLIERS = {
+    "local": 1.0,
+    "intercity": 1.0,
+    "round_trip": 2.0,
+    "religious_tour": 1.0,
+}
+
+@router.post("/estimate", response_model=FareEstimateResponse)
+def estimate_fare(data: FareEstimateRequest):
+
+    try:
+        result = calculate_estimated_fare(
+            vehicle_type=data.vehicle_type,
+            distance_km=data.distance_km,
+            trip_type=data.trip_type.value,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    return {
+        "trip_type": data.trip_type,
+        "distance_km": data.distance_km,
+        "chargeable_distance_km": result["chargeable_distance_km"],
+        "base_fare": result["base_fare"],
+        "per_km_rate": result["per_km_rate"],
+        "estimated_fare": result["estimated_fare"],
+        "currency": "INR",
+    }
+
+
+==================================================
+FILE: app/api/routes/google_routes.py
+==================================================
+
+
+import os
+
+import httpx
+from dotenv import load_dotenv
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+router = APIRouter(prefix="/routes", tags=["Google Routes"])
+
+GOOGLE_ROUTES_URL = (
+    "https://routes.googleapis.com/directions/v2:computeRoutes"
+)
+
+
+class DistanceRequest(BaseModel):
+    pickup_latitude: float = Field(ge=-90, le=90)
+    pickup_longitude: float = Field(ge=-180, le=180)
+    drop_latitude: float = Field(ge=-90, le=90)
+    drop_longitude: float = Field(ge=-180, le=180)
+
+
+@router.post("/distance")
+async def calculate_route_distance(request: DistanceRequest):
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Google Routes API key is not configured",
+        )
+
+    payload = {
+        "origin": {
+            "location": {
+                "latLng": {
+                    "latitude": request.pickup_latitude,
+                    "longitude": request.pickup_longitude,
+                }
+            }
+        },
+        "destination": {
+            "location": {
+                "latLng": {
+                    "latitude": request.drop_latitude,
+                    "longitude": request.drop_longitude,
+                }
+            }
+        },
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE",
+        "computeAlternativeRoutes": False,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": (
+            "routes.distanceMeters,"
+            "routes.duration,"
+            "routes.polyline.encodedPolyline"
+        ),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                GOOGLE_ROUTES_URL,
+                json=payload,
+                headers=headers,
+            )
+
+        if response.status_code != 200:
+            print("Google API Status:", response.status_code)
+            print("Google API Response:", response.text)
+
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "google_status": response.status_code,
+                    "google_error": response.json(),
+                },
+            )
+
+        data = response.json()
+        routes = data.get("routes", [])
+
+        if not routes:
+            raise HTTPException(
+                status_code=404,
+                detail="No driving route found between these locations",
+            )
+
+        route = routes[0]
+        distance_meters = route["distanceMeters"]
+        distance_km = round(distance_meters / 1000, 2)
+
+        duration_text = route.get("duration", "0s")
+        duration_seconds = int(duration_text.removesuffix("s"))
+
+        return {
+            "distance_meters": distance_meters,
+            "distance_km": distance_km,
+            "duration": duration_text,
+            "duration_seconds": duration_seconds,
+            "polyline": route.get("polyline", {}).get(
+                "encodedPolyline"
+            ),
+        }
+
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="Google Routes API request timed out",
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to connect to Google Routes API",
+        )
+
+
+
+==================================================
+FILE: app/api/routes/bookings.py
+==================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from sqlalchemy import or_
+from app.db import get_db
+from app.core.notifications import create_notification
+from app.services.driver_dispatch import dispatch_booking_requests
+from app.schemas import DriverBookingRequestAction
+from app.core.pricing import calculate_estimated_fare
+from app.models import (
+    User,
+    UserRole,
+    Driver,
+    Vehicle,
+    RideRoute,
+    Booking,
+    BookingStatus,
+    TripType,
+    VerificationStatus,
+    Agency,
+    AgencyBookingOffer,
+    AgencyOfferStatus,
+)
+
+from app.schemas import (
+    BookingCreate,
+    BookingResponse,
+    BookingAssignment,
+    BookingStatusUpdate,
+    DriverBookingAccept,
+    AgencyOfferCreate,
+    AgencyOfferResponse,
+)
+from app.models import DriverBookingRequest
+from app.schemas import DriverBookingRequestResponse
+
+from app.api.routes.auth import (
+    get_current_user,
+    require_roles,
+)
+
+
+router = APIRouter(
+    prefix="/bookings",
+    tags=["Bookings"]
+)
+
+
+# VEHICLE-WISE PRICING CONFIGURATION
+def calculate_fare(
+    distance_km: float,
+    trip_type: TripType,
+    vehicle_type: str,
+) -> float:
+
+    try:
+        result = calculate_estimated_fare(
+            vehicle_type=vehicle_type,
+            distance_km=distance_km,
+            trip_type=trip_type.value,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    return result["estimated_fare"]
+# BOOKING SCHEDULE MANAGEMENT
+# =====================================
+
+INDIA_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+BUFFER_MINUTES = 60
+
+AVERAGE_SPEED_KMPH = {
+    TripType.LOCAL: 25,
+    TripType.INTERCITY: 40,
+    TripType.RELIGIOUS_TOUR: 30,
+}
+
+ACTIVE_BOOKING_STATUSES = [
+    BookingStatus.ACCEPTED,
+    BookingStatus.DRIVER_ASSIGNED,
+    BookingStatus.ONGOING,
+]
+
+
+def normalize_datetime(value: datetime) -> datetime:
+    """
+    Treat timezone-naive booking times as India local time.
+    Store timezone-aware values.
+    """
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=INDIA_TIMEZONE)
+
+    return value
+
+
+def get_booking_window(booking, route):
+    """
+    Calculate the occupied time window for a booking.
+
+    Round trips use return_at.
+    One-way trips use estimated duration plus buffer.
+    Ongoing trips block further assignments until completed.
+    """
+
+    if not booking.scheduled_at:
+        raise HTTPException(
+            status_code=409,
+            detail="Booking pickup date and time are required for assignment"
+        )
+
+    start_time = normalize_datetime(booking.scheduled_at)
+
+    # An ongoing trip is treated as busy until it is completed.
+    if booking.booking_status == BookingStatus.ONGOING:
+        return (
+            start_time,
+            datetime.max.replace(tzinfo=timezone.utc)
+        )
+
+    # Round-trip booking
+    if booking.trip_type == TripType.ROUND_TRIP:
+
+        if not booking.return_at:
+            raise HTTPException(
+                status_code=409,
+                detail="Round-trip booking is missing its return time"
+            )
+
+        end_time = normalize_datetime(booking.return_at)
+
+        if end_time <= start_time:
+            raise HTTPException(
+                status_code=409,
+                detail="Invalid round-trip schedule"
+            )
+
+        return start_time, end_time
+
+    # One-way booking duration estimation
+    if not route or not route.distance_km or route.distance_km <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Valid route distance is required for scheduling"
+        )
+
+    average_speed = AVERAGE_SPEED_KMPH.get(booking.trip_type)
+
+    if not average_speed:
+        raise HTTPException(
+            status_code=409,
+            detail="Unable to estimate this trip duration"
+        )
+
+    estimated_hours = route.distance_km / average_speed
+
+    duration = (
+        timedelta(hours=estimated_hours)
+        + timedelta(minutes=BUFFER_MINUTES)
+    )
+
+    end_time = start_time + duration
+
+    return start_time, end_time
+
+
+def check_schedule_conflicts(
+    db: Session,
+    booking: Booking,
+    driver_id: int,
+    vehicle_id: int
+):
+    """
+    Reject overlapping bookings for the same driver or vehicle.
+    """
+
+    new_route = db.get(RideRoute, booking.route_id)
+
+    new_start, new_end = get_booking_window(
+        booking,
+        new_route
+    )
+
+    existing_bookings = (
+        db.query(Booking)
+        .filter(
+            Booking.id != booking.id,
+            Booking.booking_status.in_(
+                ACTIVE_BOOKING_STATUSES
+            ),
+            or_(
+                Booking.driver_id == driver_id,
+                Booking.vehicle_id == vehicle_id
+            )
+        )
+        .with_for_update()
+        .all()
+    )
+
+    for existing in existing_bookings:
+
+        existing_route = db.get(
+            RideRoute,
+            existing.route_id
+        )
+
+        existing_start, existing_end = get_booking_window(
+            existing,
+            existing_route
+        )
+
+        # Standard interval overlap check
+        if (
+            existing_start < new_end
+            and existing_end > new_start
+        ):
+
+            if existing.driver_id == driver_id:
+                detail = (
+                    f"Driver already has an overlapping booking "
+                    f"(Booking ID: {existing.id})"
+                )
+            else:
+                detail = (
+                    f"Vehicle already has an overlapping booking "
+                    f"(Booking ID: {existing.id})"
+                )
+
+            raise HTTPException(
+                status_code=409,
+                detail=detail
+            )
+
+
+# =====================================
+# 1. CREATE BOOKING
+# =====================================
+
+@router.post(
+    "/",
+    response_model=BookingResponse,
+    status_code=201
+)
+def create_booking(
+    data: BookingCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    # Only passengers can create bookings
+    if current_user.role != UserRole.PASSENGER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only passengers can create bookings"
+        )
+
+    # Prevent creating bookings for another passenger
+    if data.passenger_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot create a booking for another passenger"
+        )
+
+    passenger = db.query(User).filter(
+        User.id == current_user.id,
+        User.role == UserRole.PASSENGER,
+        User.is_active.is_(True)
+    ).first()
+
+    if not passenger:
+        raise HTTPException(
+            status_code=404,
+            detail="Active passenger not found"
+        )
+
+    try:
+
+        route = RideRoute(
+            pickup_city=data.pickup_city,
+            drop_city=data.drop_city,
+            pickup_address=data.pickup_address,
+            drop_address=data.drop_address,
+            distance_km=data.distance_km,
+            pickup_latitude=data.pickup_latitude,
+            pickup_longitude=data.pickup_longitude,
+        )
+
+        db.add(route)
+        db.flush()
+
+        booking = Booking(
+            passenger_id=current_user.id,
+            route_id=route.id,
+            trip_type=data.trip_type,
+            scheduled_at=normalize_datetime(data.scheduled_at),
+            return_at=(
+                normalize_datetime(data.return_at)
+                if data.return_at
+                else None
+            ),
+            passenger_count=data.passenger_count,
+            special_instructions=data.special_instructions,
+            preferred_vehicle_type=data.preferred_vehicle_type,
+
+            estimated_fare=calculate_fare(
+                data.distance_km,
+                data.trip_type,
+                data.preferred_vehicle_type
+            ),
+            booking_status=BookingStatus.PENDING,
+        )
+
+        db.add(booking)
+        db.flush()
+
+        # Notify all active administrators
+        admins = db.query(User).filter(
+            User.role == UserRole.ADMIN,
+            User.is_active.is_(True)
+        ).all()
+
+        for admin in admins:
+            create_notification(
+                db=db,
+                user_id=admin.id,
+                title="New Booking Received",
+                message=(
+                    f"New booking #{booking.id} "
+                    f"from {data.pickup_city} to {data.drop_city}"
+                ),
+                notification_type="new_booking",
+                booking_id=booking.id
+            )
+
+        db.commit()
+        db.refresh(booking)
+
+        return booking
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Unable to create booking due to a database conflict"
+        )
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+# =====================================
+# 2. GET BOOKINGS
+# =====================================
+
+@router.get(
+    "/",
+    response_model=list[BookingResponse]
+)
+def get_bookings(
+    passenger_id: int | None = Query(default=None),
+    driver_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    query = db.query(Booking)
+
+    # Passenger can only see their own bookings
+    if current_user.role == UserRole.PASSENGER:
+
+        if passenger_id is not None and passenger_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot access another passenger's bookings"
+            )
+
+        if driver_id is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Passenger cannot filter bookings by driver"
+            )
+
+        query = query.filter(
+            Booking.passenger_id == current_user.id
+        )
+
+    # Driver can only see assigned bookings
+    elif current_user.role == UserRole.DRIVER:
+
+        if passenger_id is not None or driver_id is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Drivers cannot use these booking filters"
+            )
+
+        driver = db.query(Driver).filter(
+            Driver.user_id == current_user.id
+        ).first()
+
+        if not driver:
+            raise HTTPException(
+                status_code=404,
+                detail="Driver profile not found"
+            )
+
+        query = query.filter(
+            Booking.driver_id == driver.id
+        )
+
+    # Admin can view all bookings
+    elif current_user.role == UserRole.ADMIN:
+
+        if passenger_id is not None:
+            query = query.filter(
+                Booking.passenger_id == passenger_id
+            )
+
+        if driver_id is not None:
+            query = query.filter(
+                Booking.driver_id == driver_id
+            )
+            
+        # Agency can view bookings assigned to its own drivers
+    elif current_user.role == UserRole.AGENCY:
+
+        if passenger_id is not None or driver_id is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Agency cannot use these booking filters"
+            )
+
+        query = query.join(
+            Driver,
+            Booking.driver_id == Driver.id
+        ).filter(
+            Driver.agency_id == (
+                db.query(Agency.id)
+                .filter(Agency.user_id == current_user.id)
+                .scalar_subquery()
+            )
+        )
+        
+        # Agency can view only its own drivers' bookings
+    elif current_user.role == UserRole.AGENCY:
+
+        driver = db.query(Driver).filter(
+            Driver.id == booking.driver_id,
+            Driver.agency_id == (
+                db.query(Agency.id)
+                .filter(Agency.user_id == current_user.id)
+                .scalar_subquery()
+            )
+        ).first()
+
+        if not driver:
+            raise HTTPException(
+                status_code=403,
+                detail="This booking does not belong to your agency"
+            )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to view bookings"
+        )
+        
+
+    return query.order_by(
+        Booking.id.desc()
+    ).limit(100).all()
+
+
+# =====================================
+# 3. GET BOOKING BY ID
+# =====================================
+
+@router.get(
+    "/available",
+    response_model=list[BookingResponse]
+)
+def get_available_bookings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only drivers can view available requests"
+        )
+
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver account is inactive"
+        )
+
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(404, "Driver profile not found")
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver is not verified"
+        )
+
+    if not driver.is_available:
+        raise HTTPException(
+            status_code=403,
+            detail="Go online to view available requests"
+        )
+
+    # Only show requests that can be served by one of
+    # this driver's active vehicles.
+    active_vehicles = db.query(Vehicle).filter(
+        Vehicle.driver_id == driver.id,
+        Vehicle.is_active.is_(True)
+    ).all()
+
+    if not active_vehicles:
+        return []
+
+    max_capacity = max(
+        vehicle.seating_capacity for vehicle in active_vehicles
+    )
+
+    requests = (
+        db.query(Booking)
+        .filter(
+            Booking.booking_status == BookingStatus.PENDING,
+            Booking.driver_id.is_(None),
+            Booking.passenger_count <= max_capacity
+        )
+        .order_by(Booking.scheduled_at.asc(), Booking.id.desc())
+        .limit(100)
+        .all()
+    )
+
+    return requests
+
+
+
+
+@router.get(
+    "/{booking_id}",
+    response_model=BookingResponse
+)
+def get_booking(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id
+    ).first()
+
+    if not booking:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    # Passenger access check
+    if current_user.role == UserRole.PASSENGER:
+
+        if booking.passenger_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot access this booking"
+            )
+
+    # Driver access check
+    elif current_user.role == UserRole.DRIVER:
+
+        driver = db.query(Driver).filter(
+            Driver.user_id == current_user.id
+        ).first()
+
+        if not driver or booking.driver_id != driver.id:
+            raise HTTPException(
+                status_code=403,
+                detail="This booking is not assigned to you"
+            )
+
+    elif current_user.role != UserRole.ADMIN:
+
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    return booking
+
+
+# =====================================
+# 4. ASSIGN DRIVER AND VEHICLE
+# ADMIN ONLY
+# =====================================
+
+
+
+@router.patch(
+    "/{booking_id}/assign",
+    response_model=BookingResponse
+)
+def assign_driver(
+    booking_id: int,
+    data: BookingAssignment,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.ADMIN)
+    )
+):
+    # Lock booking
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    if booking.booking_status != BookingStatus.PENDING:
+        raise HTTPException(
+            409,
+            "Only pending bookings can be assigned"
+        )
+
+    if not booking.scheduled_at:
+        raise HTTPException(
+            409,
+            "Booking pickup date and time are required"
+        )
+
+    # Lock driver
+    driver = (
+        db.query(Driver)
+        .filter(Driver.id == data.driver_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not driver:
+        raise HTTPException(404, "Driver not found")
+
+    driver_user = db.get(User, driver.user_id)
+
+    if not driver_user or not driver_user.is_active:
+        raise HTTPException(403, "Driver account is inactive")
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(403, "Driver is not verified")
+
+    if not driver.is_available:
+        raise HTTPException(
+            409,
+            "Driver is offline or unavailable"
+        )
+
+    # Lock vehicle
+    vehicle = (
+        db.query(Vehicle)
+        .filter(
+            Vehicle.id == data.vehicle_id,
+            Vehicle.driver_id == driver.id,
+            Vehicle.is_active.is_(True)
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not vehicle:
+        raise HTTPException(
+            400,
+            "Vehicle is inactive or does not belong to this driver"
+        )
+
+    if vehicle.seating_capacity < booking.passenger_count:
+        raise HTTPException(
+            400,
+            "Vehicle does not have enough passenger capacity"
+        )
+
+    # Check schedule conflicts
+    check_schedule_conflicts(
+        db=db,
+        booking=booking,
+        driver_id=driver.id,
+        vehicle_id=vehicle.id
+    )
+
+    # Assign driver and vehicle
+    booking.driver_id = driver.id
+    booking.vehicle_id = vehicle.id
+    booking.booking_status = BookingStatus.DRIVER_ASSIGNED
+
+    # Notify passenger
+    create_notification(
+        db=db,
+        user_id=booking.passenger_id,
+        title="Driver Assigned",
+        message=(
+            f"Your booking #{booking.id} has been assigned "
+            f"to driver {driver_user.full_name}"
+        ),
+        notification_type="driver_assigned",
+        booking_id=booking.id
+    )
+
+    # Notify driver
+    create_notification(
+        db=db,
+        user_id=driver.user_id,
+        title="New Trip Assigned",
+        message=f"You have been assigned booking #{booking.id}",
+        notification_type="trip_assigned",
+        booking_id=booking.id
+    )
+
+    try:
+        db.commit()
+        db.refresh(booking)
+        return booking
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "Booking assignment conflict"
+        )
+
+# =====================================
+# 5. UPDATE BOOKING STATUS
+# =====================================
+
+@router.patch(
+    "/{booking_id}/status",
+    response_model=BookingResponse
+)
+def update_booking_status(
+    booking_id: int,
+    data: BookingStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, detail="Booking not found")
+
+    driver = None
+
+    # PASSENGER PERMISSIONS
+    if current_user.role == UserRole.PASSENGER:
+
+        if booking.passenger_id != current_user.id:
+            raise HTTPException(
+                403,
+                detail="You cannot update this booking"
+            )
+
+        if data.booking_status != BookingStatus.CANCELLED:
+            raise HTTPException(
+                403,
+                detail="Passengers can only cancel bookings"
+            )
+
+        if booking.booking_status != BookingStatus.PENDING:
+            raise HTTPException(
+                400,
+                detail="Passenger can only cancel pending bookings"
+            )
+
+    # DRIVER PERMISSIONS
+    elif current_user.role == UserRole.DRIVER:
+
+        driver = (
+            db.query(Driver)
+            .filter(Driver.user_id == current_user.id)
+            .with_for_update()
+            .first()
+        )
+
+        if not driver or booking.driver_id != driver.id:
+            raise HTTPException(
+                403,
+                detail="This booking is not assigned to you"
+            )
+
+        allowed_driver_actions = {
+            BookingStatus.ONGOING,
+            BookingStatus.COMPLETED,
+            BookingStatus.CANCELLED,
+        }
+
+        if data.booking_status not in allowed_driver_actions:
+            raise HTTPException(
+                403,
+                detail="Driver is not allowed to perform this action"
+            )
+
+    # ADMIN PERMISSIONS
+    elif current_user.role != UserRole.ADMIN:
+
+        raise HTTPException(
+            403,
+            detail="You are not authorized to update bookings"
+        )
+
+    # VALIDATE STATUS TRANSITIONS
+    allowed_transitions = {
+        BookingStatus.PENDING: {
+            BookingStatus.CANCELLED,
+        },
+        BookingStatus.ACCEPTED: {
+            BookingStatus.CANCELLED,
+        },
+        BookingStatus.DRIVER_ASSIGNED: {
+            BookingStatus.ONGOING,
+            BookingStatus.CANCELLED,
+        },
+        BookingStatus.ONGOING: {
+            BookingStatus.COMPLETED,
+        },
+    }
+
+    if data.booking_status not in allowed_transitions.get(
+        booking.booking_status, set()
+    ):
+        raise HTTPException(
+            409,
+            detail=(
+                f"Cannot change booking from "
+                f"{booking.booking_status.value} to "
+                f"{data.booking_status.value}"
+            )
+        )
+
+    old_status = booking.booking_status
+    booking.booking_status = data.booking_status
+
+    # CANCELLATION WORKFLOW
+    if data.booking_status == BookingStatus.CANCELLED:
+
+        # Lock and cancel all pending driver requests
+        pending_requests = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.booking_id == booking.id,
+                DriverBookingRequest.status == "pending",
+            )
+            .with_for_update()
+            .all()
+        )
+
+        for request in pending_requests:
+            request.status = "cancelled"
+            request.responded_at = datetime.now(timezone.utc)
+
+        # Notify passenger when driver or admin cancels
+        if current_user.role in {
+            UserRole.DRIVER,
+            UserRole.ADMIN,
+        }:
+            create_notification(
+                db=db,
+                user_id=booking.passenger_id,
+                title="Booking Cancelled",
+                message=f"Booking #{booking.id} has been cancelled.",
+                notification_type="booking_cancelled",
+                booking_id=booking.id,
+            )
+
+        # Notify assigned driver when admin cancels
+        if (
+            current_user.role == UserRole.ADMIN
+            and booking.driver_id
+        ):
+            assigned_driver = db.get(
+                Driver,
+                booking.driver_id
+            )
+
+            if assigned_driver:
+                create_notification(
+                    db=db,
+                    user_id=assigned_driver.user_id,
+                    title="Booking Cancelled",
+                    message=f"Booking #{booking.id} has been cancelled by admin.",
+                    notification_type="booking_cancelled",
+                    booking_id=booking.id,
+                )
+
+        # Notify drivers whose pending requests were cancelled
+        for request in pending_requests:
+            requested_driver = db.get(
+                Driver,
+                request.driver_id
+            )
+
+            if requested_driver:
+                create_notification(
+                    db=db,
+                    user_id=requested_driver.user_id,
+                    title="Booking Request Cancelled",
+                    message=f"Booking request #{booking.id} is no longer available.",
+                    notification_type="booking_cancelled",
+                    booking_id=booking.id,
+                )
+
+        # Restore assigned driver's availability when safe
+        if (
+            old_status == BookingStatus.DRIVER_ASSIGNED
+            and booking.driver_id
+        ):
+            assigned_driver = (
+                db.query(Driver)
+                .filter(
+                    Driver.id == booking.driver_id
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if assigned_driver:
+
+                other_active_booking = (
+                    db.query(Booking.id)
+                    .filter(
+                        Booking.driver_id == assigned_driver.id,
+                        Booking.id != booking.id,
+                        Booking.booking_status.in_([
+                            BookingStatus.DRIVER_ASSIGNED,
+                            BookingStatus.ONGOING,
+                        ]),
+                    )
+                    .first()
+                )
+
+                if (
+                    not other_active_booking
+                    and assigned_driver.verification_status
+                    == VerificationStatus.VERIFIED
+                ):
+                    assigned_driver.is_available = True
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking
+
+
+# =====================================
+# ADMIN OFFERS BOOKING TO AN AGENCY
+# =====================================
+
+@router.post(
+    "/{booking_id}/offer",
+    response_model=AgencyOfferResponse,
+    status_code=201
+)
+def offer_booking_to_agency(
+    booking_id: int,
+    data: AgencyOfferCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.ADMIN)
+    )
+):
+    # Find and lock booking
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    if booking.booking_status != BookingStatus.PENDING:
+        raise HTTPException(
+            409,
+            "Only pending bookings can be offered to agencies"
+        )
+
+    if booking.driver_id is not None:
+        raise HTTPException(
+            409,
+            "Booking already has an assigned driver"
+        )
+
+    # Find agency
+    agency = db.query(Agency).filter(
+        Agency.id == data.agency_id
+    ).first()
+
+    if not agency:
+        raise HTTPException(404, "Agency not found")
+
+    if agency.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            403,
+            "Only verified agencies can receive booking offers"
+        )
+
+    agency_user = db.query(User).filter(
+        User.id == agency.user_id,
+        User.is_active.is_(True)
+    ).first()
+
+    if not agency_user:
+        raise HTTPException(
+            403,
+            "Agency account is inactive"
+        )
+
+    # Prevent another active offer for this booking
+    existing_offer = db.query(AgencyBookingOffer).filter(
+        AgencyBookingOffer.booking_id == booking_id,
+        AgencyBookingOffer.status.in_([
+            AgencyOfferStatus.PENDING,
+            AgencyOfferStatus.ACCEPTED
+        ])
+    ).first()
+
+    if existing_offer:
+        raise HTTPException(
+            409,
+            "This booking already has an active agency offer"
+        )
+
+    # Create offer
+    offer = AgencyBookingOffer(
+        booking_id=booking.id,
+        agency_id=agency.id,
+        status=AgencyOfferStatus.PENDING
+    )
+
+    try:
+        db.add(offer)
+        db.flush()
+
+        # Notify agency
+        create_notification(
+            db=db,
+            user_id=agency_user.id,
+            title="New Booking Offer",
+            message=(
+                f"Booking #{booking.id} is available for your agency. "
+                f"Route: {booking.route_id}"
+            ),
+            notification_type="agency_booking_offer",
+            booking_id=booking.id
+        )
+
+        db.commit()
+        db.refresh(offer)
+
+        return offer
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "Unable to create agency booking offer"
+        )
+# =====================================
+# DRIVER: AVAILABLE RIDE REQUESTS
+# =====================================
+# =====================================
+# DRIVER: ACCEPT RIDE REQUEST
+# =====================================
+
+@router.patch(
+    "/{booking_id}/accept",
+    response_model=BookingResponse
+)
+def accept_booking(
+    booking_id: int,
+    data: DriverBookingAccept,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only drivers can accept ride requests"
+        )
+
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver account is inactive"
+        )
+
+    # Lock the booking so two drivers cannot accept it together.
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+
+    if (
+        booking.booking_status != BookingStatus.PENDING
+        or booking.driver_id is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This booking is no longer available"
+        )
+
+    driver = (
+        db.query(Driver)
+        .filter(Driver.user_id == current_user.id)
+        .with_for_update()
+        .first()
+    )
+
+    if not driver:
+        raise HTTPException(404, "Driver profile not found")
+
+    if driver.verification_status != VerificationStatus.VERIFIED:
+        raise HTTPException(
+            status_code=403,
+            detail="Driver is not verified"
+        )
+
+    if not driver.is_available:
+        raise HTTPException(
+            status_code=403,
+            detail="You must be online to accept a ride"
+        )
+
+    # Lock and validate the driver's selected vehicle.
+    vehicle = (
+        db.query(Vehicle)
+        .filter(
+            Vehicle.id == data.vehicle_id,
+            Vehicle.driver_id == driver.id,
+            Vehicle.is_active.is_(True)
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not vehicle:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected vehicle is inactive or does not belong to you"
+        )
+
+    if vehicle.seating_capacity < booking.passenger_count:
+        raise HTTPException(
+            status_code=400,
+            detail="Vehicle does not have enough passenger capacity"
+        )
+
+    # Reuse the existing schedule conflict checker.
+    check_schedule_conflicts(
+        db=db,
+        booking=booking,
+        driver_id=driver.id,
+        vehicle_id=vehicle.id
+    )
+
+    booking.driver_id = driver.id
+    booking.vehicle_id = vehicle.id
+    booking.booking_status = BookingStatus.DRIVER_ASSIGNED
+
+    create_notification(
+        db=db,
+        user_id=booking.passenger_id,
+        title="Driver Accepted Your Booking",
+        message=(
+            f"Your booking #{booking.id} has been accepted "
+            f"by driver {current_user.full_name}."
+        ),
+        notification_type="driver_assigned",
+        booking_id=booking.id
+    )
+
+    create_notification(
+        db=db,
+        user_id=current_user.id,
+        title="Ride Accepted",
+        message=f"You have accepted booking #{booking.id}.",
+        notification_type="trip_assigned",
+        booking_id=booking.id
+    )
+
+    try:
+        db.commit()
+        db.refresh(booking)
+        return booking
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Booking acceptance conflict. Please try again."
+        )
+        
+        
+
+@router.get("/driver-requests", response_model=list[DriverBookingRequestResponse])
+def get_driver_booking_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only drivers can view booking requests"
+        )
+
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    requests = db.query(DriverBookingRequest).filter(
+        DriverBookingRequest.driver_id == driver.id,
+        DriverBookingRequest.status == "pending"
+    ).order_by(
+        DriverBookingRequest.offered_at.desc()
+    ).all()
+
+    return requests
+
+@router.patch("/driver-requests/{request_id}/reject")
+def reject_driver_booking_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(
+            status_code=403,
+            detail="Only drivers can reject booking requests"
+        )
+
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    request = db.query(DriverBookingRequest).filter(
+        DriverBookingRequest.id == request_id,
+        DriverBookingRequest.driver_id == driver.id
+    ).with_for_update().first()
+
+    if not request:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking request not found"
+        )
+
+    if request.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="This request is no longer pending"
+        )
+
+    request.status = "rejected"
+    request.responded_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    return {
+        "message": "Booking request rejected successfully",
+        "request_id": request.id,
+        "status": request.status
+    }
+
+@router.post("/{booking_id}/send-requests")
+def send_booking_requests_to_drivers(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id
+    ).first()
+
+    if not booking:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    if (
+        current_user.role != UserRole.ADMIN
+        and booking.passenger_id != current_user.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot dispatch this booking"
+        )
+
+    try:
+        return dispatch_booking_requests(db, booking_id)
+
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
+
+    except Exception:
+        db.rollback()
+        raise
+
+@router.patch("/driver-requests/{request_id}/accept")
+def accept_driver_booking_request(
+    request_id: int,
+    request_data: DriverBookingRequestAction,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=403, detail="Only drivers can accept requests")
+
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    try:
+        driver_request = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.id == request_id,
+                DriverBookingRequest.driver_id == driver.id,
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not driver_request:
+            raise HTTPException(status_code=404, detail="Request not found")
+
+        if driver_request.status != "pending":
+            raise HTTPException(status_code=400, detail="Request is no longer pending")
+
+        now = datetime.now(timezone.utc)
+        expiry = driver_request.expires_at
+
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+
+        if expiry <= now:
+            driver_request.status = "expired"
+            driver_request.responded_at = now
+            db.commit()
+            raise HTTPException(status_code=400, detail="Request has expired")
+
+        booking = (
+            db.query(Booking)
+            .filter(Booking.id == driver_request.booking_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not booking or booking.booking_status != BookingStatus.PENDING:
+            raise HTTPException(status_code=400, detail="Booking is no longer available")
+
+        if booking.driver_id is not None:
+            raise HTTPException(status_code=400, detail="Booking already assigned")
+
+        if not driver.is_available or driver.verification_status != VerificationStatus.VERIFIED:
+            raise HTTPException(status_code=400, detail="Driver is not available or verified")
+
+        vehicle_query = db.query(Vehicle).filter(
+            Vehicle.driver_id == driver.id,
+            Vehicle.is_active == True,
+            Vehicle.seating_capacity >= (booking.passenger_count or 1),
+        )
+
+        if request_data.vehicle_id is not None:
+            vehicle_query = vehicle_query.filter(
+                Vehicle.id == request_data.vehicle_id
+            )
+
+        vehicle = vehicle_query.first()
+
+        if not vehicle:
+            raise HTTPException(
+                status_code=400,
+                detail="No suitable active vehicle found"
+            )
+
+        if (
+            booking.preferred_vehicle_type
+            and vehicle.vehicle_type.lower()
+            != booking.preferred_vehicle_type.lower()
+        ):
+            raise HTTPException(status_code=400, detail="Vehicle type does not match")
+
+        # Assign booking to this driver
+        booking.driver_id = driver.id
+        booking.vehicle_id = vehicle.id
+        booking.booking_status = BookingStatus.DRIVER_ASSIGNED
+        driver.is_available = False
+
+        driver_request.status = "accepted"
+        driver_request.responded_at = now
+
+        # Cancel all other outstanding requests for this booking
+        other_requests = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.booking_id == booking.id,
+                DriverBookingRequest.id != driver_request.id,
+                DriverBookingRequest.status == "pending",
+            )
+            .with_for_update()
+            .all()
+        )
+
+        for other in other_requests:
+            other.status = "cancelled"
+            other.responded_at = now
+
+        create_notification(
+            db=db,
+            user_id=booking.passenger_id,
+            booking_id=booking.id,
+            title="Driver assigned",
+            message="A driver has accepted your booking.",
+            notification_type="booking",
+        )
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Booking accepted successfully",
+            "booking_id": booking.id,
+            "driver_id": driver.id,
+            "vehicle_id": vehicle.id,
+            "status": "driver_assigned",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+
+==================================================
+FILE: app/core/pricing.py
+==================================================
+
+# Shared Pricing Configuration
+# All prices are in INR.
+
+VEHICLE_RATES = {
+    "dzire": {"base_fare": 100.0, "per_km": 12.0},
+    "eeco": {"base_fare": 100.0, "per_km": 11.0},
+    "ertiga": {"base_fare": 150.0, "per_km": 15.0},
+    "innova": {"base_fare": 200.0, "per_km": 18.0},
+    "urbania": {"base_fare": 500.0, "per_km": 25.0},
+}
+
+TRIP_MULTIPLIERS = {
+    "local": 1.0,
+    "intercity": 1.0,
+    "round_trip": 2.0,
+    "religious_tour": 1.0,
+}
+
+
+def get_vehicle_rate(vehicle_type: str) -> dict:
+    vehicle_type = vehicle_type.lower()
+
+    rates = VEHICLE_RATES.get(vehicle_type)
+
+    if rates is None:
+        raise ValueError(
+            f"Unsupported vehicle type: {vehicle_type}"
+        )
+
+    return rates
+
+
+def calculate_estimated_fare(
+    vehicle_type: str,
+    distance_km: float,
+    trip_type: str,
+) -> dict:
+
+    rates = get_vehicle_rate(vehicle_type)
+
+    multiplier = TRIP_MULTIPLIERS.get(trip_type)
+
+    if multiplier is None:
+        raise ValueError(f"Unsupported trip type: {trip_type}")
+
+    chargeable_distance = distance_km * multiplier
+
+    estimated_fare = (
+        rates["base_fare"]
+        + chargeable_distance * rates["per_km"]
+    )
+
+    return {
+        "base_fare": rates["base_fare"],
+        "per_km_rate": rates["per_km"],
+        "chargeable_distance_km": chargeable_distance,
+        "estimated_fare": round(estimated_fare, 2),
+    }
+
+
+def calculate_final_fare(
+    vehicle_type: str,
+    actual_distance_km: float,
+) -> float:
+
+    rates = get_vehicle_rate(vehicle_type)
+
+    final_fare = (
+        rates["base_fare"]
+        + actual_distance_km * rates["per_km"]
+    )
+
+    return round(final_fare, 2)
+
+
+==================================================
+FILE: app/core/config.py
+==================================================
+
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ROOT_DIR = Path(__file__).resolve().parents[3]
+
+
+jwt_secret_key: str
+jwt_algorithm: str = "HS256"
+#access_token_expire_minutes: int = 60
+class Settings(BaseSettings):
+    app_env: str = "development"
+    database_url: str
+    access_token_expire_minutes: int = 60
+    platform_commission_percent: float = 5
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"    
+    model_config = SettingsConfigDict(
+        env_file=ROOT_DIR / ".env",
+        extra="ignore"
+    )
+
+
+settings = Settings()
+
+
+
+
+
+==================================================
+FILE: tests/test_auth.py
+==================================================
+
+
+
+==================================================
+FILE: tests/test_fares.py
+==================================================
+
+
+
+==================================================
+FILE: tests/test_bookings.py
+==================================================
+

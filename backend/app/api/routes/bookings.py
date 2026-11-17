@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_
 from app.db import get_db
 from app.core.notifications import create_notification
+from app.services.driver_dispatch import dispatch_booking_requests
+from app.schemas import DriverBookingRequestAction
 from app.core.pricing import calculate_estimated_fare
 from app.models import (
     User,
@@ -286,6 +288,8 @@ def create_booking(
             pickup_address=data.pickup_address,
             drop_address=data.drop_address,
             distance_km=data.distance_km,
+            pickup_latitude=data.pickup_latitude,
+            pickup_longitude=data.pickup_longitude,
         )
 
         db.add(route)
@@ -754,48 +758,52 @@ def update_booking_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
-    booking = db.query(Booking).filter(
-        Booking.id == booking_id
-    ).with_for_update().first()
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
 
     if not booking:
-        raise HTTPException(
-            status_code=404,
-            detail="Booking not found"
-        )
+        raise HTTPException(404, detail="Booking not found")
+
+    driver = None
 
     # PASSENGER PERMISSIONS
     if current_user.role == UserRole.PASSENGER:
 
         if booking.passenger_id != current_user.id:
             raise HTTPException(
-                status_code=403,
+                403,
                 detail="You cannot update this booking"
             )
 
         if data.booking_status != BookingStatus.CANCELLED:
             raise HTTPException(
-                status_code=403,
+                403,
                 detail="Passengers can only cancel bookings"
             )
 
         if booking.booking_status != BookingStatus.PENDING:
             raise HTTPException(
-                status_code=400,
+                400,
                 detail="Passenger can only cancel pending bookings"
             )
 
     # DRIVER PERMISSIONS
     elif current_user.role == UserRole.DRIVER:
 
-        driver = db.query(Driver).filter(
-            Driver.user_id == current_user.id
-        ).first()
+        driver = (
+            db.query(Driver)
+            .filter(Driver.user_id == current_user.id)
+            .with_for_update()
+            .first()
+        )
 
         if not driver or booking.driver_id != driver.id:
             raise HTTPException(
-                status_code=403,
+                403,
                 detail="This booking is not assigned to you"
             )
 
@@ -807,7 +815,7 @@ def update_booking_status(
 
         if data.booking_status not in allowed_driver_actions:
             raise HTTPException(
-                status_code=403,
+                403,
                 detail="Driver is not allowed to perform this action"
             )
 
@@ -815,33 +823,32 @@ def update_booking_status(
     elif current_user.role != UserRole.ADMIN:
 
         raise HTTPException(
-            status_code=403,
+            403,
             detail="You are not authorized to update bookings"
         )
 
-    # VALIDATE BOOKING STATUS TRANSITIONS
+    # VALIDATE STATUS TRANSITIONS
     allowed_transitions = {
-
         BookingStatus.PENDING: {
             BookingStatus.CANCELLED,
         },
-
+        BookingStatus.ACCEPTED: {
+            BookingStatus.CANCELLED,
+        },
         BookingStatus.DRIVER_ASSIGNED: {
             BookingStatus.ONGOING,
             BookingStatus.CANCELLED,
         },
-
         BookingStatus.ONGOING: {
             BookingStatus.COMPLETED,
         },
-
     }
 
     if data.booking_status not in allowed_transitions.get(
         booking.booking_status, set()
     ):
         raise HTTPException(
-            status_code=409,
+            409,
             detail=(
                 f"Cannot change booking from "
                 f"{booking.booking_status.value} to "
@@ -849,46 +856,113 @@ def update_booking_status(
             )
         )
 
+    old_status = booking.booking_status
     booking.booking_status = data.booking_status
 
-    # Send notification when booking is cancelled
+    # CANCELLATION WORKFLOW
     if data.booking_status == BookingStatus.CANCELLED:
 
-        # If driver cancels, notify passenger
-        if current_user.role == UserRole.DRIVER:
+        # Lock and cancel all pending driver requests
+        pending_requests = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.booking_id == booking.id,
+                DriverBookingRequest.status == "pending",
+            )
+            .with_for_update()
+            .all()
+        )
+
+        for request in pending_requests:
+            request.status = "cancelled"
+            request.responded_at = datetime.now(timezone.utc)
+
+        # Notify passenger when driver or admin cancels
+        if current_user.role in {
+            UserRole.DRIVER,
+            UserRole.ADMIN,
+        }:
             create_notification(
                 db=db,
                 user_id=booking.passenger_id,
                 title="Booking Cancelled",
-                message=f"Driver has cancelled booking #{booking.id}.",
+                message=f"Booking #{booking.id} has been cancelled.",
                 notification_type="booking_cancelled",
-                booking_id=booking.id
+                booking_id=booking.id,
             )
 
-        # If admin cancels, notify passenger and assigned driver
-        elif current_user.role == UserRole.ADMIN:
-
-            create_notification(
-                db=db,
-                user_id=booking.passenger_id,
-                title="Booking Cancelled",
-                message=f"Your booking #{booking.id} has been cancelled.",
-                notification_type="booking_cancelled",
-                booking_id=booking.id
+        # Notify assigned driver when admin cancels
+        if (
+            current_user.role == UserRole.ADMIN
+            and booking.driver_id
+        ):
+            assigned_driver = db.get(
+                Driver,
+                booking.driver_id
             )
 
-            if booking.driver_id:
-                driver = db.get(Driver, booking.driver_id)
+            if assigned_driver:
+                create_notification(
+                    db=db,
+                    user_id=assigned_driver.user_id,
+                    title="Booking Cancelled",
+                    message=f"Booking #{booking.id} has been cancelled by admin.",
+                    notification_type="booking_cancelled",
+                    booking_id=booking.id,
+                )
 
-                if driver:
-                    create_notification(
-                        db=db,
-                        user_id=driver.user_id,
-                        title="Booking Cancelled",
-                        message=f"Booking #{booking.id} has been cancelled.",
-                        notification_type="booking_cancelled",
-                        booking_id=booking.id
+        # Notify drivers whose pending requests were cancelled
+        for request in pending_requests:
+            requested_driver = db.get(
+                Driver,
+                request.driver_id
+            )
+
+            if requested_driver:
+                create_notification(
+                    db=db,
+                    user_id=requested_driver.user_id,
+                    title="Booking Request Cancelled",
+                    message=f"Booking request #{booking.id} is no longer available.",
+                    notification_type="booking_cancelled",
+                    booking_id=booking.id,
+                )
+
+        # Restore assigned driver's availability when safe
+        if (
+            old_status == BookingStatus.DRIVER_ASSIGNED
+            and booking.driver_id
+        ):
+            assigned_driver = (
+                db.query(Driver)
+                .filter(
+                    Driver.id == booking.driver_id
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if assigned_driver:
+
+                other_active_booking = (
+                    db.query(Booking.id)
+                    .filter(
+                        Booking.driver_id == assigned_driver.id,
+                        Booking.id != booking.id,
+                        Booking.booking_status.in_([
+                            BookingStatus.DRIVER_ASSIGNED,
+                            BookingStatus.ONGOING,
+                        ]),
                     )
+                    .first()
+                )
+
+                if (
+                    not other_active_booking
+                    and assigned_driver.verification_status
+                    == VerificationStatus.VERIFIED
+                ):
+                    assigned_driver.is_available = True
 
     db.commit()
     db.refresh(booking)
@@ -1226,3 +1300,182 @@ def reject_driver_booking_request(
         "request_id": request.id,
         "status": request.status
     }
+
+@router.post("/{booking_id}/send-requests")
+def send_booking_requests_to_drivers(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id
+    ).first()
+
+    if not booking:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    if (
+        current_user.role != UserRole.ADMIN
+        and booking.passenger_id != current_user.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot dispatch this booking"
+        )
+
+    try:
+        return dispatch_booking_requests(db, booking_id)
+
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
+
+    except Exception:
+        db.rollback()
+        raise
+
+@router.patch("/driver-requests/{request_id}/accept")
+def accept_driver_booking_request(
+    request_id: int,
+    request_data: DriverBookingRequestAction,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=403, detail="Only drivers can accept requests")
+
+    driver = db.query(Driver).filter(
+        Driver.user_id == current_user.id
+    ).first()
+
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    try:
+        driver_request = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.id == request_id,
+                DriverBookingRequest.driver_id == driver.id,
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not driver_request:
+            raise HTTPException(status_code=404, detail="Request not found")
+
+        if driver_request.status != "pending":
+            raise HTTPException(status_code=400, detail="Request is no longer pending")
+
+        now = datetime.now(timezone.utc)
+        expiry = driver_request.expires_at
+
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+
+        if expiry <= now:
+            driver_request.status = "expired"
+            driver_request.responded_at = now
+            db.commit()
+            raise HTTPException(status_code=400, detail="Request has expired")
+
+        booking = (
+            db.query(Booking)
+            .filter(Booking.id == driver_request.booking_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not booking or booking.booking_status != BookingStatus.PENDING:
+            raise HTTPException(status_code=400, detail="Booking is no longer available")
+
+        if booking.driver_id is not None:
+            raise HTTPException(status_code=400, detail="Booking already assigned")
+
+        if not driver.is_available or driver.verification_status != VerificationStatus.VERIFIED:
+            raise HTTPException(status_code=400, detail="Driver is not available or verified")
+
+        vehicle_query = db.query(Vehicle).filter(
+            Vehicle.driver_id == driver.id,
+            Vehicle.is_active == True,
+            Vehicle.seating_capacity >= (booking.passenger_count or 1),
+        )
+
+        if request_data.vehicle_id is not None:
+            vehicle_query = vehicle_query.filter(
+                Vehicle.id == request_data.vehicle_id
+            )
+
+        vehicle = vehicle_query.first()
+
+        if not vehicle:
+            raise HTTPException(
+                status_code=400,
+                detail="No suitable active vehicle found"
+            )
+
+        if (
+            booking.preferred_vehicle_type
+            and vehicle.vehicle_type.lower()
+            != booking.preferred_vehicle_type.lower()
+        ):
+            raise HTTPException(status_code=400, detail="Vehicle type does not match")
+
+        # Assign booking to this driver
+        booking.driver_id = driver.id
+        booking.vehicle_id = vehicle.id
+        booking.booking_status = BookingStatus.DRIVER_ASSIGNED
+        driver.is_available = False
+
+        driver_request.status = "accepted"
+        driver_request.responded_at = now
+
+        # Cancel all other outstanding requests for this booking
+        other_requests = (
+            db.query(DriverBookingRequest)
+            .filter(
+                DriverBookingRequest.booking_id == booking.id,
+                DriverBookingRequest.id != driver_request.id,
+                DriverBookingRequest.status == "pending",
+            )
+            .with_for_update()
+            .all()
+        )
+
+        for other in other_requests:
+            other.status = "cancelled"
+            other.responded_at = now
+
+        create_notification(
+            db=db,
+            user_id=booking.passenger_id,
+            booking_id=booking.id,
+            title="Driver assigned",
+            message="A driver has accepted your booking.",
+            notification_type="booking",
+        )
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Booking accepted successfully",
+            "booking_id": booking.id,
+            "driver_id": driver.id,
+            "vehicle_id": vehicle.id,
+            "status": "driver_assigned",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise

@@ -108,6 +108,8 @@ class BookingCreate(BaseModel):
 
     passenger_count: int = Field(default=1, ge=1, le=50)
     special_instructions: str | None = None
+    pickup_latitude: float | None = None
+    pickup_longitude: float | None = None
 
     @model_validator(mode="after")
     def validate_return_trip(self):

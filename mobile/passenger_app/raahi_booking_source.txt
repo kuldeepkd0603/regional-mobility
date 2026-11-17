@@ -1,0 +1,4515 @@
+﻿RAAHI PASSENGER APP - BOOKING SOURCE FILES
+
+
+========== .\lib\screens\home\home_screen.dart ==========
+
+
+import 'package:flutter/material.dart';
+
+import '../profile/profile_screen.dart';
+import '../booking/location_picker_screen.dart';
+import '../../core/services/api_service.dart';
+import '../booking/available_rides_screen.dart';
+import '../booking/my_bookings_screen.dart';
+import '../notifications/notifications_screen.dart';
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  // Temporary frontend-only distance used only when Google Routes fails.
+  static const double _fallbackDistanceKm = 100.0;
+
+  String selectedRide = 'Local';
+  String selectedVehicle = 'dzire';
+  bool isSearching = false;
+
+  final TextEditingController pickupController =
+      TextEditingController();
+
+  final TextEditingController destinationController =
+      TextEditingController();
+
+  Map<String, double>? selectedCoordinates;
+  String? distanceSource;
+
+  // Readable route details returned by LocationPickerScreen.
+  String pickupAddress = '';
+  String dropAddress = '';
+  String pickupCity = '';
+  String dropCity = '';
+
+  final List<Map<String, dynamic>> vehicles = [
+    {
+      'id': 'dzire',
+      'name': 'Dzire',
+      'seats': '4 Seater',
+      'icon': Icons.directions_car,
+      'asset': 'assets/images/raahi_assets/vehicles/dzire.png',
+    },
+    {
+      'id': 'eeco',
+      'name': 'Eeco',
+      'seats': '7 Seater',
+      'icon': Icons.airport_shuttle,
+      'asset': 'assets/images/raahi_assets/vehicles/eeco.png',
+    },
+    {
+      'id': 'ertiga',
+      'name': 'Ertiga',
+      'seats': '6 Seater',
+      'icon': Icons.directions_car_filled,
+      'asset': 'assets/images/raahi_assets/vehicles/ertiga.png',
+    },
+    {
+      'id': 'innova',
+      'name': 'Innova',
+      'seats': '7 Seater',
+      'icon': Icons.airport_shuttle,
+      'asset': 'assets/images/raahi_assets/vehicles/innova.png',
+    },
+    {
+      'id': 'urbania',
+      'name': 'Urbania',
+      'seats': '17 Seater',
+      'icon': Icons.directions_bus,
+      'asset': 'assets/images/raahi_assets/vehicles/urbania.png',
+    },
+  ];
+
+  @override
+  void dispose() {
+    pickupController.dispose();
+    destinationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _openMapPicker() async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const LocationPickerScreen(),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+
+    final pickupLat =
+        (result['pickup_latitude'] as num?)?.toDouble();
+    final pickupLng =
+        (result['pickup_longitude'] as num?)?.toDouble();
+    final dropLat =
+        (result['drop_latitude'] as num?)?.toDouble();
+    final dropLng =
+        (result['drop_longitude'] as num?)?.toDouble();
+
+    final newPickupAddress =
+        result['pickup_address']?.toString().trim() ?? '';
+    final newDropAddress =
+        result['drop_address']?.toString().trim() ?? '';
+    final newPickupCity =
+        result['pickup_city']?.toString().trim() ?? '';
+    final newDropCity =
+        result['drop_city']?.toString().trim() ?? '';
+
+    if (pickupLat == null ||
+        pickupLng == null ||
+        dropLat == null ||
+        dropLng == null) {
+      return;
+    }
+
+    setState(() {
+      selectedCoordinates = {
+        'pickup_latitude': pickupLat,
+        'pickup_longitude': pickupLng,
+        'drop_latitude': dropLat,
+        'drop_longitude': dropLng,
+      };
+
+      pickupAddress = newPickupAddress;
+      dropAddress = newDropAddress;
+      pickupCity = newPickupCity;
+      dropCity = newDropCity;
+
+      pickupController.text = pickupAddress.isNotEmpty
+          ? pickupAddress
+          : '${pickupLat.toStringAsFixed(5)}, ${pickupLng.toStringAsFixed(5)}';
+
+      destinationController.text = dropAddress.isNotEmpty
+          ? dropAddress
+          : '${dropLat.toStringAsFixed(5)}, ${dropLng.toStringAsFixed(5)}';
+
+      distanceSource = null;
+    });
+  }
+
+  
+String get _tripTypeValue =>
+      selectedRide.toLowerCase().replaceAll(' ', '_');
+
+  Future<double> _getDistanceForSelectedRoute() async {
+    // Always try the actual road distance first.
+    try {
+      final distanceKm = await ApiService.getRouteDistanceKm(
+        pickupLatitude: selectedCoordinates!['pickup_latitude']!,
+        pickupLongitude: selectedCoordinates!['pickup_longitude']!,
+        dropLatitude: selectedCoordinates!['drop_latitude']!,
+        dropLongitude: selectedCoordinates!['drop_longitude']!,
+      );
+
+      if (distanceKm <= 0 || distanceKm > 2000) {
+        throw Exception('Google returned an invalid distance.');
+      }
+
+      if (!mounted) throw Exception('Screen is no longer active.');
+
+      setState(() {
+        distanceSource = 'Google Routes';
+      });
+      return distanceKm;
+    } catch (_) {
+      // This is a temporary estimate, not the route's actual road distance.
+      if (!mounted) throw Exception('Screen is no longer active.');
+
+      setState(() {
+        distanceSource = 'Temporary default';
+      });
+      return _fallbackDistanceKm;
+    }
+  }
+
+  Future<void> _searchRides() async {
+    if (selectedCoordinates == null) {
+      _showMessage('Please select pickup and destination on Google Maps');
+      return;
+    }
+
+    if (pickupAddress.isEmpty ||
+        dropAddress.isEmpty ||
+        pickupCity.isEmpty ||
+        dropCity.isEmpty) {
+      _showMessage(
+        'Please reselect both locations so their addresses can be identified.',
+      );
+      return;
+    }
+
+    setState(() {
+      isSearching = true;
+    });
+
+    try {
+      // Calculate distance before searching for drivers.
+      final distanceKm = await _getDistanceForSelectedRoute();
+
+      if (!mounted) return;
+
+      final drivers = await ApiService.findNearbyDrivers(
+        latitude: selectedCoordinates!['pickup_latitude']!,
+        longitude: selectedCoordinates!['pickup_longitude']!,
+        vehicleType: selectedVehicle,
+        passengerCount: 1,
+        radiusKm: 10,
+      );
+
+      if (!mounted) return;
+
+      if (drivers.isEmpty) {
+        _showMessage('No available drivers found within 10 km');
+        return;
+      }
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AvailableRidesScreen(
+            drivers: drivers,
+            distanceKm: distanceKm,
+            tripType: _tripTypeValue,
+            vehicleModel: selectedVehicle,
+            pickupAddress: pickupAddress,
+            dropAddress: dropAddress,
+            pickupCity: pickupCity,
+            dropCity: dropCity,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        _showMessage(e.toString().replaceFirst('Exception: ', ''));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          isSearching = false;
+        });
+      }
+    }
+  }
+
+  void _openNotifications() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const NotificationsScreen(),
+      ),
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  static const Color _green = Color(0xFF078B4B);
+  static const Color _deepGreen = Color(0xFF006B4A);
+  static const Color _ink = Color(0xFF111827);
+  static const Color _line = Color(0xFFE1E7EC);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F9FA),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildHeroHeader(),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                      child: _buildBookingPanel(),
+                    ),
+                    _buildVehicleSection(),
+                    _buildDestinationSection(),
+                  ],
+                ),
+              ),
+            ),
+            SafeArea(
+              top: false,
+              child: _buildBottomNavigation(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeroHeader() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 22),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFBDEFFF), Color(0xFFEAF9FF), Color(0xFFF7F9FA)],
+          stops: [0, 0.62, 1],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.menu_rounded, color: _ink, size: 27),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Image.asset(
+                    'assets/images/raahi_assets/brand/raahi_logo.png',
+                    width: 140,
+                    height: 48,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.centerLeft,
+                  ),
+                ),
+              ),
+              _roundHeaderAction(
+                Icons.notifications_none_rounded,
+                () => _openNotifications(),
+              ),
+              const SizedBox(width: 9),
+              _roundHeaderAction(
+                Icons.person_rounded,
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
+                filled: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'Hi, Kuldeep ðŸ‘‹',
+            style: TextStyle(
+              color: _ink,
+              fontSize: 23,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            'Where would you like to go today?',
+            style: TextStyle(
+              color: Color(0xFF17212B),
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              height: 58,
+              width: double.infinity,
+              child: Image.asset(
+                'assets/images/raahi_assets/header/temple_header.png',
+                fit: BoxFit.contain,
+                alignment: Alignment.centerRight,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _roundHeaderAction(IconData icon, VoidCallback onTap, {bool filled = false}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(30),
+      child: Container(
+        width: 39,
+        height: 39,
+        decoration: BoxDecoration(
+          color: filled ? _green : Colors.white.withValues(alpha: 0.65),
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Icon(icon, color: filled ? Colors.white : _ink, size: 23),
+      ),
+    );
+  }
+
+  Widget _buildBookingPanel() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(15, 14, 15, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(27),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF182B36).withValues(alpha: 0.13),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            height: 49,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F2F4),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _bookingTab(
+                    icon: Icons.directions_car_filled_rounded,
+                    label: 'Book a Ride',
+                    selected: true,
+                    onTap: () {},
+                  ),
+                ),
+                Expanded(
+                  child: _bookingTab(
+                    icon: Icons.directions_bus_rounded,
+                    label: 'Tour & Travels',
+                    selected: false,
+                    onTap: () => _showMessage('Tour & Travels coming soon'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _referenceLocationField(
+            controller: pickupController,
+            hint: 'Pickup Location',
+            leading: const Icon(Icons.circle, color: Color(0xFF23B34B), size: 19),
+            trailing: IconButton(
+              onPressed: _openMapPicker,
+              icon: const Icon(Icons.my_location_rounded, color: _deepGreen),
+              tooltip: 'Choose pickup and destination on map',
+            ),
+          ),
+          const SizedBox(height: 9),
+          _referenceLocationField(
+            controller: destinationController,
+            hint: 'Destination',
+            leading: const Icon(Icons.location_on, color: Colors.red, size: 22),
+            trailing: IconButton(
+              onPressed: _openMapPicker,
+              icon: const Icon(Icons.swap_vert_rounded, color: _deepGreen),
+              tooltip: 'Choose destination on map',
+            ),
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _referenceTripCard('Local', Icons.directions_car_filled_rounded),
+                const SizedBox(width: 8),
+                _referenceTripCard('Intercity', Icons.alt_route_rounded),
+                const SizedBox(width: 8),
+                _referenceTripCard('Round Trip', Icons.sync_rounded),
+                const SizedBox(width: 8),
+                _referenceTripCard('Religious Tour', Icons.temple_hindu_rounded),
+              ],
+            ),
+          ),
+          const SizedBox(height: 17),
+          SizedBox(
+            width: double.infinity,
+            height: 55,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF49D20A), Color(0xFF00865B), Color(0xFF006B51)],
+                ),
+                borderRadius: BorderRadius.circular(30),
+                boxShadow: [
+                  BoxShadow(
+                    color: _green.withValues(alpha: 0.20),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: ElevatedButton(
+                onPressed: isSearching ? null : _searchRides,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  disabledBackgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                ),
+                child: isSearching
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Find Available Rides',
+                            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                          ),
+                          SizedBox(width: 12),
+                          Icon(Icons.arrow_forward_rounded, size: 24),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+          if (distanceSource != null) ...[
+            const SizedBox(height: 9),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                distanceSource == 'Google Routes'
+                    ? 'Road distance calculated by Google Routes'
+                    : 'Temporary estimate: 100 km (Google Routes unavailable)',
+                style: TextStyle(
+                  color: distanceSource == 'Temporary default'
+                      ? const Color(0xFF9A6A21)
+                      : Colors.blueGrey,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _bookingTab({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(25),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: selected
+              ? const LinearGradient(colors: [Color(0xFF48D20A), Color(0xFF007D59)])
+              : null,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: selected
+              ? [BoxShadow(color: _green.withValues(alpha: 0.25), blurRadius: 5, offset: const Offset(0, 2))]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: selected ? Colors.white : _deepGreen, size: 23),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : _ink,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _referenceLocationField({
+    required TextEditingController controller,
+    required String hint,
+    required Widget leading,
+    required Widget trailing,
+  }) {
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _line, width: 1.2),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          leading,
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              onChanged: (_) {
+                setState(() {
+                  selectedCoordinates = null;
+                  distanceSource = null;
+                  if (controller == pickupController) {
+                    pickupAddress = '';
+                    pickupCity = '';
+                  } else {
+                    dropAddress = '';
+                    dropCity = '';
+                  }
+                });
+              },
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: const TextStyle(color: Color(0xFF4B5563), fontSize: 15),
+                border: InputBorder.none,
+                isDense: true,
+              ),
+              style: const TextStyle(fontSize: 15, color: _ink),
+            ),
+          ),
+          trailing,
+          const SizedBox(width: 5),
+        ],
+      ),
+    );
+  }
+
+  Widget _referenceTripCard(String label, IconData icon) {
+    final selected = selectedRide == label;
+    return InkWell(
+      onTap: () => setState(() => selectedRide = label),
+      borderRadius: BorderRadius.circular(17),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: label == 'Religious Tour' ? 132 : 105,
+        height: 83,
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFE4F9E9) : const Color(0xFFFCFDFE),
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(
+            color: selected ? const Color(0xFF20B943) : const Color(0xFFE5E9ED),
+            width: selected ? 1.7 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: const Color(0xFF087D37), size: 27),
+            const SizedBox(height: 5),
+            FittedBox(
+              child: Text(
+                label,
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVehicleSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Choose Your Vehicle',
+                    style: TextStyle(color: _ink, fontSize: 20, fontWeight: FontWeight.w900),
+                  ),
+                ),
+                const Text('View All  â€º', style: TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 130,
+            child: ListView.separated(
+              padding: const EdgeInsets.only(right: 2),
+              scrollDirection: Axis.horizontal,
+              itemCount: vehicles.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final vehicle = vehicles[index];
+                return _referenceVehicleCard(
+                  id: vehicle['id'],
+                  name: vehicle['name'],
+                  seats: vehicle['seats'],
+                  icon: vehicle['icon'],
+                  asset: vehicle['asset'],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _referenceVehicleCard({
+    required String id,
+    required String name,
+    required String seats,
+    required IconData icon,
+    required String asset,
+  }) {
+    final selected = selectedVehicle == id;
+    return GestureDetector(
+      onTap: () => setState(() => selectedVehicle = id),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: 112,
+        padding: const EdgeInsets.fromLTRB(7, 8, 7, 7),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFE9F9EF) : Colors.white,
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(color: selected ? const Color(0xFF20B943) : _line, width: selected ? 1.6 : 1),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.07), blurRadius: 7, offset: const Offset(0, 3)),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              height: 59,
+              width: double.infinity,
+              child: Image.asset(
+                asset,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => Icon(icon, size: 48, color: _deepGreen),
+              ),
+            ),
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: _ink)),
+            const SizedBox(height: 3),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.person_outline_rounded, size: 15),
+                const SizedBox(width: 3),
+                Flexible(child: Text(seats, maxLines: 1, style: const TextStyle(fontSize: 10, color: _ink))),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDestinationSection() {
+    final destinations = [
+      {'name': 'Ujjain', 'sub': '(Mahakal)', 'asset': 'assets/images/raahi_assets/destinations/ujjain.png'},
+      {'name': 'Indore', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/indore.png'},
+      {'name': 'Dewas', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/dewas.png'},
+      {'name': 'Omkareshwar', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/omkareshwar.png'},
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              children: const [
+                Icon(Icons.location_on_rounded, color: Color(0xFF20B943), size: 25),
+                SizedBox(width: 5),
+                Expanded(
+                  child: Text('Popular Destinations', style: TextStyle(color: _ink, fontSize: 19, fontWeight: FontWeight.w900)),
+                ),
+                Text('View All  â€º', style: TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 11),
+          SizedBox(
+            height: 128,
+            child: ListView.separated(
+              padding: const EdgeInsets.only(right: 2),
+              scrollDirection: Axis.horizontal,
+              itemCount: destinations.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 9),
+              itemBuilder: (context, index) {
+                final destination = destinations[index];
+                final city = destination['name'] as String;
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      destinationController.text = city;
+                      dropAddress = city;
+                      dropCity = city;
+                      selectedCoordinates = null;
+                      distanceSource = null;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(17),
+                  child: Container(
+                    width: 124,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(17),
+                      border: Border.all(color: _line),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            width: double.infinity,
+                            child: Image.asset(
+                              destination['asset'] as String,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(Icons.place_rounded, color: _green, size: 48),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(3, 5, 3, 6),
+                          child: Column(
+                            children: [
+                              Text(city, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: _ink)),
+                              if ((destination['sub'] as String).isNotEmpty)
+                                Text(destination['sub'] as String, style: const TextStyle(fontSize: 10, color: _ink)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomNavigation() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.09), blurRadius: 15, offset: const Offset(0, -4)),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _bottomNavItem(Icons.home_filled, 'Home', true, () {}),
+          _bottomNavItem(Icons.calendar_month_rounded, 'My Bookings', false, () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const MyBookingsScreen()));
+          }),
+          _bottomNavItem(Icons.notifications_none_rounded, 'Notifications', false, () {
+            _openNotifications();
+          }),
+          _bottomNavItem(Icons.person_outline_rounded, 'Profile', false, () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomNavItem(IconData icon, String label, bool selected, VoidCallback onTap) {
+    final color = selected ? _green : const Color(0xFF111827);
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(15),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 54,
+              height: 36,
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFD5F7E3) : Colors.transparent,
+                borderRadius: BorderRadius.circular(25),
+              ),
+              child: Icon(icon, color: color, size: 25),
+            ),
+            const SizedBox(height: 3),
+            Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 10, fontWeight: selected ? FontWeight.w800 : FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\location_picker_screen.dart ==========
+
+
+import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+class LocationPickerScreen extends StatefulWidget {
+  const LocationPickerScreen({super.key});
+
+  @override
+  State<LocationPickerScreen> createState() =>
+      _LocationPickerScreenState();
+}
+
+class _LocationPickerScreenState
+    extends State<LocationPickerScreen> {
+  GoogleMapController? mapController;
+
+  LatLng? pickupLocation;
+  LatLng? dropLocation;
+
+  bool selectingPickup = true;
+  bool isLoadingLocation = false;
+
+  static const LatLng defaultLocation =
+      LatLng(23.1765, 75.7885); // Ujjain
+
+  @override
+  void initState() {
+    super.initState();
+    _getCurrentLocation();
+  }
+
+  Future<void> _getCurrentLocation() async {
+    setState(() => isLoadingLocation = true);
+
+    try {
+      bool serviceEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        _showMessage('Please enable location services.');
+        return;
+      }
+
+      LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showMessage('Location permission is required to find you.');
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+
+      final location = LatLng(
+        position.latitude,
+        position.longitude,
+      );
+
+      if (!mounted) return;
+
+      await mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(location, 15),
+      );
+    } catch (e) {
+      _showMessage('Unable to get current location.');
+    } finally {
+      if (mounted) {
+        setState(() => isLoadingLocation = false);
+      }
+    }
+  }
+
+  void _onMapTap(LatLng position) {
+    setState(() {
+      if (selectingPickup) {
+        pickupLocation = position;
+        selectingPickup = false;
+      } else {
+        dropLocation = position;
+      }
+    });
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Set<Marker> get markers {
+    final result = <Marker>{};
+
+    if (pickupLocation != null) {
+      result.add(
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: pickupLocation!,
+          infoWindow: const InfoWindow(title: 'Pickup'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueGreen,
+          ),
+        ),
+      );
+    }
+
+    if (dropLocation != null) {
+      result.add(
+        Marker(
+          markerId: const MarkerId('drop'),
+          position: dropLocation!,
+          infoWindow: const InfoWindow(title: 'Destination'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueRed,
+          ),
+        ),
+      );
+    }
+
+    return result;
+  }
+
+  Future<void> _confirmLocations() async {
+    if (pickupLocation == null || dropLocation == null) {
+        _showMessage('Please select both locations.');
+        return;
+    }
+
+    if (pickupLocation == dropLocation) {
+        _showMessage('Pickup and destination must be different.');
+        return;
+    }
+
+    try {
+        setState(() => isLoadingLocation = true);
+
+        final pickupPlaces = await placemarkFromCoordinates(
+        pickupLocation!.latitude,
+        pickupLocation!.longitude,
+        );
+
+        final dropPlaces = await placemarkFromCoordinates(
+        dropLocation!.latitude,
+        dropLocation!.longitude,
+        );
+
+        if (pickupPlaces.isEmpty || dropPlaces.isEmpty) {
+        throw Exception('Unable to identify selected addresses.');
+        }
+
+        final pickup = pickupPlaces.first;
+        final drop = dropPlaces.first;
+
+        String formatAddress(Placemark place) {
+        return [
+            place.name,
+            place.subLocality,
+            place.locality,
+            place.subAdministrativeArea,
+            place.administrativeArea,
+            place.postalCode,
+        ].where((item) => item != null && item.trim().isNotEmpty)
+        .toSet()
+        .join(', ');
+        }
+
+        if (!mounted) return;
+
+        Navigator.pop(context, {
+        'pickup_latitude': pickupLocation!.latitude,
+        'pickup_longitude': pickupLocation!.longitude,
+        'drop_latitude': dropLocation!.latitude,
+        'drop_longitude': dropLocation!.longitude,
+
+        'pickup_address': formatAddress(pickup),
+        'drop_address': formatAddress(drop),
+
+        'pickup_city': pickup.locality ??
+            pickup.subAdministrativeArea ??
+            pickup.administrativeArea ??
+            '',
+
+        'drop_city': drop.locality ??
+            drop.subAdministrativeArea ??
+            drop.administrativeArea ??
+            '',
+        });
+    } catch (e) {
+        if (mounted) {
+        _showMessage('Could not get addresses. Please try again.');
+        }
+    } finally {
+        if (mounted) {
+        setState(() => isLoadingLocation = false);
+        }
+    }
+    }
+
+  @override
+  void dispose() {
+    mapController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Choose Locations'),
+      ),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            color: Colors.white,
+            child: Column(
+              children: [
+                _locationOption(
+                  title: 'Pickup Location',
+                  subtitle: pickupLocation == null
+                      ? 'Tap the map to select pickup'
+                      : 'Location selected',
+                  icon: Icons.my_location,
+                  color: Colors.green,
+                  selected: selectingPickup,
+                  onTap: () {
+                    setState(() => selectingPickup = true);
+                  },
+                ),
+                const Divider(),
+                _locationOption(
+                  title: 'Destination',
+                  subtitle: dropLocation == null
+                      ? 'Tap the map to select destination'
+                      : 'Location selected',
+                  icon: Icons.location_on,
+                  color: Colors.red,
+                  selected: !selectingPickup,
+                  onTap: () {
+                    setState(() => selectingPickup = false);
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          Expanded(
+            child: GoogleMap(
+              initialCameraPosition: const CameraPosition(
+                target: defaultLocation,
+                zoom: 12,
+              ),
+              onMapCreated: (controller) {
+                mapController = controller;
+              },
+              onTap: _onMapTap,
+              markers: markers,
+              myLocationEnabled: true,
+              myLocationButtonEnabled: true,
+              zoomControlsEnabled: true,
+              mapToolbarEnabled: false,
+            ),
+          ),
+
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                onPressed: isLoadingLocation ? null : _confirmLocations,
+                child: isLoadingLocation
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text(
+                        'Confirm Locations',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                        ),
+                        ),
+                )
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _locationOption({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      onTap: onTap,
+      leading: Icon(icon, color: color, size: 28),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+      subtitle: Text(subtitle),
+      trailing: selected
+          ? const Icon(Icons.check_circle, color: Colors.blue)
+          : const Icon(Icons.circle_outlined),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\fare_estimation_screen.dart ==========
+
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/services/api_service.dart';
+import 'booking_details_screen.dart';
+
+class FareEstimationScreen extends StatefulWidget {
+  final double distanceKm;
+  final String tripType;
+  final String vehicleModel;
+  final Map<String, dynamic> driver;
+  final String pickupAddress;
+  final String dropAddress;
+  final String pickupCity;
+  final String dropCity;
+
+  const FareEstimationScreen({
+    super.key,
+    required this.distanceKm,
+    required this.tripType,
+    required this.vehicleModel,
+    required this.driver,
+    required this.pickupAddress,
+    required this.dropAddress,
+    required this.pickupCity,
+    required this.dropCity,
+  });
+
+  @override
+  State<FareEstimationScreen> createState() =>
+      _FareEstimationScreenState();
+}
+
+class _FareEstimationScreenState
+    extends State<FareEstimationScreen> {
+  bool isLoading = true;
+  String? errorMessage;
+  Map<String, dynamic>? fareData;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFareEstimate();
+  }
+
+  Future<void> _loadFareEstimate() async {
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final result = await ApiService.estimateFare(
+        tripType: widget.tripType,
+        vehicleType: widget.vehicleModel,
+        distanceKm: widget.distanceKm,
+        passengerCount: 1,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        fareData = result;
+        isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        errorMessage =
+            e.toString().replaceFirst('Exception: ', '');
+        isLoading = false;
+      });
+    }
+  }
+
+  String _formatMoney(dynamic value) {
+    final amount = double.tryParse(value.toString());
+
+    if (amount == null) return 'N/A';
+
+    return 'â‚¹${amount.toStringAsFixed(2)}';
+  }
+
+  String _formatDistance(dynamic value) {
+    final distance = double.tryParse(value.toString());
+
+    if (distance == null) return 'N/A';
+
+    return '${distance.toStringAsFixed(2)} km';
+  }
+
+  Widget _fareRow(String title, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.textGrey,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: AppColors.textDark,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _locationDetails() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.trip_origin, color: Colors.green, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'PICKUP',
+                      style: TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.pickupAddress,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (widget.pickupCity.isNotEmpty)
+                      Text(
+                        widget.pickupCity,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 9, top: 8, bottom: 8),
+            child: Container(
+              height: 24,
+              width: 1,
+              color: Colors.grey.shade400,
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.location_on, color: Colors.red, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'DROP',
+                      style: TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.dropAddress,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (widget.dropCity.isNotEmpty)
+                      Text(
+                        widget.dropCity,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Fare Estimation'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+      body: isLoading
+          ? const Center(
+              child: CircularProgressIndicator(),
+            )
+          : errorMessage != null
+              ? _errorView()
+              : _fareView(),
+    );
+  }
+
+  Widget _errorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 55,
+              color: Colors.red,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Unable to calculate fare',
+              style: TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              errorMessage ?? 'Something went wrong',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _loadFareEstimate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fareView() {
+    final fare = fareData!;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Selected driver
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                const CircleAvatar(
+                  radius: 25,
+                  child: Icon(Icons.person),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.driver['driver_name']
+                                ?.toString() ??
+                            'Selected Driver',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.driver['vehicle_name']
+                                ?.toString() ??
+                            widget.vehicleModel,
+                        style: const TextStyle(
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.verified,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Pickup & Drop Details',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          _locationDetails(),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Journey Details',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                _fareRow(
+                  'Trip Type',
+                  widget.tripType.replaceAll('_', ' '),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Vehicle',
+                  widget.vehicleModel.toUpperCase(),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Journey Distance',
+                  _formatDistance(fare['distance_km']),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'Fare Breakdown',
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                _fareRow(
+                  'Base Fare',
+                  _formatMoney(fare['base_fare']),
+                ),
+                const Divider(),
+                _fareRow(
+                  'Per KM Rate',
+                  '${_formatMoney(fare['per_km_rate'])}/km',
+                ),
+                const Divider(),
+                _fareRow(
+                  'Chargeable Distance',
+                  _formatDistance(
+                    fare['chargeable_distance_km'],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Estimated total
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'Estimated Total Fare',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _formatMoney(fare['estimated_fare']),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Final fare may vary according to applicable charges.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BookingDetailsScreen(
+                      tripType: widget.tripType,
+                      vehicleModel: widget.vehicleModel,
+                      distanceKm: widget.distanceKm,
+                      pickupAddress: widget.pickupAddress,
+                      dropAddress: widget.dropAddress,
+                      pickupCity: widget.pickupCity,
+                      dropCity: widget.dropCity,
+                      estimatedFare: fare['estimated_fare'],
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.event_available),
+              label: const Text('Continue to Booking'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              onPressed: _loadFareEstimate,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Recalculate Fare'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\booking_details_screen.dart ==========
+
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/services/api_service.dart';
+
+class BookingDetailsScreen extends StatefulWidget {
+  final String tripType;
+  final String vehicleModel;
+  final double distanceKm;
+  final String pickupAddress;
+  final String dropAddress;
+  final String pickupCity;
+  final String dropCity;
+  final dynamic estimatedFare;
+
+  const BookingDetailsScreen({
+    super.key,
+    required this.tripType,
+    required this.vehicleModel,
+    required this.distanceKm,
+    required this.pickupAddress,
+    required this.dropAddress,
+    required this.pickupCity,
+    required this.dropCity,
+    required this.estimatedFare,
+  });
+
+  @override
+  State<BookingDetailsScreen> createState() => _BookingDetailsScreenState();
+}
+
+class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
+  DateTime? _travelDate;
+  TimeOfDay? _travelTime;
+  DateTime? _returnDate;
+  TimeOfDay? _returnTime;
+  int _passengerCount = 1;
+  final TextEditingController _instructionsController = TextEditingController();
+  bool _isSubmitting = false;
+  Map<String, dynamic>? _bookingResult;
+  String? _errorMessage;
+
+  bool get _isRoundTrip => widget.tripType.toLowerCase() == 'round_trip';
+
+  @override
+  void dispose() {
+    _instructionsController.dispose();
+    super.dispose();
+  }
+
+  DateTime? _combineDateAndTime(DateTime? date, TimeOfDay? time) {
+    if (date == null || time == null) return null;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  Future<void> _selectTravelDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _travelDate ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) setState(() => _travelDate = picked);
+  }
+
+  Future<void> _selectTravelTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _travelTime ?? TimeOfDay.now(),
+    );
+    if (picked != null) setState(() => _travelTime = picked);
+  }
+
+  Future<void> _selectReturnDate() async {
+    final now = _travelDate ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _returnDate ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) setState(() => _returnDate = picked);
+  }
+
+  Future<void> _selectReturnTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _returnTime ?? TimeOfDay.now(),
+    );
+    if (picked != null) setState(() => _returnTime = picked);
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) return 'Select date';
+    return '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}';
+  }
+
+  String _timeLabel(TimeOfDay? value) =>
+      value == null ? 'Select time' : value.format(context);
+
+  int? _readPassengerId(Map<String, dynamic> user) {
+    final candidates = [user['id'], user['user_id'], user['passenger_id']];
+    for (final value in candidates) {
+      if (value is int) return value;
+      if (value is String) {
+        final parsed = int.tryParse(value);
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _submitBooking() async {
+    final scheduledAt = _combineDateAndTime(_travelDate, _travelTime);
+    if (scheduledAt == null) {
+      setState(() => _errorMessage = 'Please select your travel date and time.');
+      return;
+    }
+    if (scheduledAt.isBefore(DateTime.now())) {
+      setState(() => _errorMessage = 'Travel date and time must be in the future.');
+      return;
+    }
+
+    DateTime? returnAt;
+    if (_isRoundTrip) {
+      returnAt = _combineDateAndTime(_returnDate, _returnTime);
+      if (returnAt == null) {
+        setState(() => _errorMessage = 'Please select your return date and time.');
+        return;
+      }
+      if (!returnAt.isAfter(scheduledAt)) {
+        setState(() => _errorMessage = 'Return date and time must be after departure.');
+        return;
+      }
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final user = await ApiService.getCurrentUser();
+      final passengerId = _readPassengerId(user);
+      if (passengerId == null) {
+        throw Exception('Could not find your passenger ID in the login profile. Please share the /auth/me response with support.');
+      }
+
+      final result = await ApiService.createBooking(
+        passengerId: passengerId,
+        tripType: widget.tripType,
+        preferredVehicleType: widget.vehicleModel,
+        pickupCity: widget.pickupCity,
+        dropCity: widget.dropCity,
+        pickupAddress: widget.pickupAddress,
+        dropAddress: widget.dropAddress,
+        distanceKm: widget.distanceKm,
+        scheduledAt: scheduledAt,
+        returnAt: returnAt,
+        passengerCount: _passengerCount,
+        specialInstructions: _instructionsController.text.trim().isEmpty
+            ? null
+            : _instructionsController.text.trim(),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _bookingResult = result;
+        _isSubmitting = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+        _isSubmitting = false;
+      });
+    }
+  }
+
+  Widget _sectionCard({required Widget child}) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: child,
+      );
+
+  Widget _pickerRow({required String title, required String value, required VoidCallback onTap, required IconData icon}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.primary),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(color: AppColors.textGrey, fontSize: 12)),
+              const SizedBox(height: 4),
+              Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ])),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final booking = _bookingResult;
+    if (booking != null) return _successView(booking);
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Booking Details'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Journey', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.trip_origin, color: Colors.green), const SizedBox(width: 10),
+              Expanded(child: Text('${widget.pickupAddress}\n${widget.pickupCity}', style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+            const Padding(padding: EdgeInsets.only(left: 10, top: 8, bottom: 8), child: Icon(Icons.more_vert, size: 18, color: Colors.grey)),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.location_on, color: Colors.red), const SizedBox(width: 10),
+              Expanded(child: Text('${widget.dropAddress}\n${widget.dropCity}', style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+            const Divider(height: 24),
+            Text('Vehicle: ${widget.vehicleModel.toUpperCase()}'),
+            const SizedBox(height: 6),
+            Text('Distance: ${widget.distanceKm.toStringAsFixed(2)} km'),
+            const SizedBox(height: 6),
+            Text('Estimated fare: â‚¹${widget.estimatedFare}'),
+          ])),
+          const SizedBox(height: 20),
+          const Text('Travel Schedule', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Column(children: [
+            _pickerRow(title: 'Travel date', value: _dateLabel(_travelDate), onTap: _selectTravelDate, icon: Icons.calendar_today),
+            const Divider(height: 1),
+            _pickerRow(title: 'Departure time', value: _timeLabel(_travelTime), onTap: _selectTravelTime, icon: Icons.access_time),
+            if (_isRoundTrip) ...[
+              const Divider(height: 1),
+              _pickerRow(title: 'Return date', value: _dateLabel(_returnDate), onTap: _selectReturnDate, icon: Icons.event_repeat),
+              const Divider(height: 1),
+              _pickerRow(title: 'Return time', value: _timeLabel(_returnTime), onTap: _selectReturnTime, icon: Icons.access_time),
+            ],
+          ])),
+          const SizedBox(height: 20),
+          const Text('Passengers', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          _sectionCard(child: Row(children: [
+            const Expanded(child: Text('Number of passengers', style: TextStyle(fontWeight: FontWeight.w600))),
+            IconButton(onPressed: _passengerCount > 1 ? () => setState(() => _passengerCount--) : null, icon: const Icon(Icons.remove_circle_outline)),
+            Text('$_passengerCount', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            IconButton(onPressed: _passengerCount < 12 ? () => setState(() => _passengerCount++) : null, icon: const Icon(Icons.add_circle_outline)),
+          ])),
+          const SizedBox(height: 20),
+          const Text('Special instructions (optional)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _instructionsController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'Any luggage, pickup landmark or other request...',
+              filled: true,
+              fillColor: AppColors.white,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          ),
+          if (_errorMessage != null) ...[
+            const SizedBox(height: 14),
+            Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+          ],
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton(
+              onPressed: _isSubmitting ? null : _submitBooking,
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              child: _isSubmitting
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Confirm Booking Request', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text('Your booking will remain pending until an admin assigns a driver.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textGrey, fontSize: 12)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _successView(Map<String, dynamic> booking) {
+    final bookingId = booking['booking_id'] ?? booking['id'] ?? 'Submitted';
+    final status = booking['status']?.toString().toUpperCase() ?? 'PENDING';
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle, color: Colors.green, size: 76),
+          const SizedBox(height: 18),
+          const Text('Booking Request Submitted', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          Text('Booking ID: $bookingId', style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('Status: $status', style: const TextStyle(color: AppColors.textGrey)),
+          const SizedBox(height: 14),
+          const Text('Your request has been sent. A driver will be assigned after admin confirmation.', textAlign: TextAlign.center),
+          const SizedBox(height: 24),
+          SizedBox(width: double.infinity, child: ElevatedButton(
+            onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+            child: const Text('Back to Home'),
+          )),
+        ],
+      ))),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\available_rides_screen.dart ==========
+
+import 'package:flutter/material.dart';
+import '../../core/constants/app_colors.dart';
+import 'fare_estimation_screen.dart';
+class AvailableRidesScreen extends StatefulWidget {
+    @override
+    State<AvailableRidesScreen> createState() =>
+        _AvailableRidesScreenState();
+    final List<Map<String, dynamic>> drivers;
+
+    final double distanceKm;
+    final String tripType;
+    final String vehicleModel;
+    final String pickupAddress;
+    final String dropAddress;
+    final String pickupCity;
+    final String dropCity;
+
+    const AvailableRidesScreen({
+        super.key,
+        required this.drivers,
+        required this.distanceKm,
+        required this.tripType,
+        required this.vehicleModel,
+        required this.pickupAddress,
+        required this.dropAddress,
+        required this.pickupCity,
+        required this.dropCity,
+    });
+}
+
+class _AvailableRidesScreenState
+    extends State<AvailableRidesScreen> {
+  Map<String, dynamic>? selectedDriver;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text(
+          'Available Rides',
+          style: TextStyle(
+            color: AppColors.primary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        backgroundColor: AppColors.white,
+        iconTheme: const IconThemeData(
+          color: AppColors.primary,
+        ),
+      ),
+      body: widget.drivers.isEmpty
+          ? const Center(
+              child: Text('No available drivers found'),
+            )
+          : Column(
+              children: [
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Text(
+                        '${widget.drivers.length} drivers found near your pickup',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      ...widget.drivers.map(
+                        (driver) => _driverCard(driver),
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (selectedDriver != null)
+                  _continueButton(),
+              ],
+            ),
+    );
+  }
+
+  Widget _driverCard(Map<String, dynamic> driver) {
+    final rating = driver['rating'] ?? 0;
+    final distance = driver['distance_km'] ?? 0;
+   
+
+    final isSelected =
+        selectedDriver?['driver_id'] == driver['driver_id'];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isSelected
+              ? AppColors.primary
+              : Colors.grey.shade200,
+          width: isSelected ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 25,
+                backgroundColor:
+                    AppColors.primary.withValues(alpha: 0.1),
+                child: const Icon(
+                  Icons.person,
+                  color: AppColors.primary,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driver['driver_name']?.toString() ?? 'Driver',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star,
+                          color: Colors.orange,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text('$rating'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              if (isSelected)
+                const Icon(
+                  Icons.check_circle,
+                  color: Colors.green,
+                )
+              else
+                const Icon(
+                  Icons.verified,
+                  color: Colors.green,
+                ),
+            ],
+          ),
+
+          const Divider(height: 24),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.directions_car,
+                color: AppColors.primary,
+                size: 25,
+              ),
+              const SizedBox(width: 10),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driver['vehicle_name']?.toString() ?? 'Vehicle',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      driver['vehicle_type']?.toString() ??
+                          'Unknown type',
+                      style: const TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              Text(
+                '${driver['seating_capacity']} Seats',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.confirmation_number_outlined,
+                size: 18,
+                color: AppColors.textGrey,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  driver['registration_number']?.toString() ??
+                      'Registration unavailable',
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on_outlined,
+                size: 18,
+                color: Colors.green,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${distance.toString()} km from pickup',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => _viewDriver(driver),
+              child: Text(
+                isSelected ? 'View Selected Driver' : 'View Driver',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _viewDriver(Map<String, dynamic> driver) async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DriverDetailsScreen(driver: driver),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+
+    setState(() {
+      selectedDriver = result;
+    });
+  }
+
+  Widget _continueButton() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: AppColors.white,
+      child: SizedBox(
+        width: double.infinity,
+        height: 52,
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                builder: (_) => FareEstimationScreen(
+                    distanceKm: widget.distanceKm,
+                    tripType: widget.tripType,
+                    vehicleModel: widget.vehicleModel,
+                    driver: selectedDriver!,
+                    pickupAddress: widget.pickupAddress,
+                    dropAddress: widget.dropAddress,
+                    pickupCity: widget.pickupCity,
+                    dropCity: widget.dropCity,
+                ),
+                ),
+            );
+            },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Text(
+            'Continue to Fare Estimation',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+// =======================================================
+// DRIVER DETAILS SCREEN
+// =======================================================
+
+class DriverDetailsScreen extends StatelessWidget {
+  final Map<String, dynamic> driver;
+
+  const DriverDetailsScreen({
+    super.key,
+    required this.driver,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+
+      appBar: AppBar(
+        title: const Text('Driver Details'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            CircleAvatar(
+              radius: 45,
+              backgroundColor:
+                  AppColors.primary.withValues(alpha: 0.1),
+              child: const Icon(
+                Icons.person,
+                size: 55,
+                color: AppColors.primary,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            Text(
+              driver['driver_name']?.toString() ?? 'Driver',
+              style: const TextStyle(
+                fontSize: 23,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            const Text(
+              'Driver information',
+              style: TextStyle(color: AppColors.textGrey),
+            ),
+
+            const SizedBox(height: 24),
+
+            _detail(
+              'Vehicle',
+              driver['vehicle_name']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Vehicle Type',
+              driver['vehicle_type']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Registration Number',
+              driver['registration_number']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Rating',
+              driver['rating']?.toString() ?? 'N/A',
+            ),
+
+            _detail(
+              'Seating Capacity',
+              '${driver['seating_capacity'] ?? 'N/A'} Seats',
+            ),
+
+            _detail(
+              'Distance from Pickup',
+              '${driver['distance_km'] ?? 'N/A'} km',
+            ),
+
+            const SizedBox(height: 30),
+
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context, driver);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Select This Driver',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detail(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.textGrey,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\screens\booking\my_bookings_screen.dart ==========
+
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_colors.dart';
+import '../../core/services/api_service.dart';
+import 'live_tracking_screen.dart';
+
+class MyBookingsScreen extends StatefulWidget {
+  const MyBookingsScreen({super.key});
+
+  @override
+  State<MyBookingsScreen> createState() => _MyBookingsScreenState();
+}
+
+class _MyBookingsScreenState extends State<MyBookingsScreen> {
+  bool isLoading = true;
+  String? errorMessage;
+  List<Map<String, dynamic>> bookings = [];
+  String selectedFilter = 'All';
+  DateTime? selectedDate;
+
+  static const List<String> filters = [
+    'All',
+    'Pending',
+    'Active',
+    'Completed',
+    'Cancelled',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBookings();
+  }
+
+  Future<void> _loadBookings() async {
+    setState(() {
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final result = await ApiService.getMyBookings();
+
+      if (!mounted) return;
+
+      setState(() {
+        bookings = result;
+        isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        errorMessage = e.toString().replaceFirst('Exception: ', '');
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      helpText: 'Select booking date',
+    );
+
+    if (picked != null && mounted) {
+      setState(() {
+        selectedDate = picked;
+      });
+    }
+  }
+
+  void _clearDateFilter() {
+    setState(() {
+      selectedDate = null;
+    });
+  }
+
+  String _status(Map<String, dynamic> booking) {
+    return (booking['booking_status'] ?? '').toString().toLowerCase();
+  }
+
+  List<Map<String, dynamic>> get filteredBookings {
+    List<Map<String, dynamic>> result;
+
+    switch (selectedFilter) {
+      case 'Pending':
+        result = bookings.where((b) => _status(b) == 'pending').toList();
+        break;
+
+      case 'Active':
+        result = bookings.where((b) {
+          return [
+            'accepted',
+            'driver_assigned',
+            'ongoing',
+          ].contains(_status(b));
+        }).toList();
+        break;
+
+      case 'Completed':
+        result = bookings.where((b) => _status(b) == 'completed').toList();
+        break;
+
+      case 'Cancelled':
+        result = bookings.where((b) => _status(b) == 'cancelled').toList();
+        break;
+
+      default:
+        result = List<Map<String, dynamic>>.from(bookings);
+    }
+
+    // Apply selected date filter.
+    if (selectedDate != null) {
+      result = result.where((booking) {
+        final date = DateTime.tryParse(
+          booking['scheduled_at']?.toString() ?? '',
+        )?.toLocal();
+
+        return date != null &&
+            date.year == selectedDate!.year &&
+            date.month == selectedDate!.month &&
+            date.day == selectedDate!.day;
+      }).toList();
+    }
+
+    return result;
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'pending':
+        return Colors.orange;
+
+      case 'accepted':
+      case 'driver_assigned':
+        return Colors.blue;
+
+      case 'ongoing':
+        return Colors.green;
+
+      case 'completed':
+        return Colors.teal;
+
+      case 'cancelled':
+        return Colors.red;
+
+      default:
+        return AppColors.textGrey;
+    }
+  }
+
+  String _prettyStatus(String status) {
+    if (status.isEmpty) return 'Unknown';
+
+    return status
+        .split('_')
+        .map(
+          (part) => part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}',
+        )
+        .join(' ');
+  }
+
+  String _formatDate(dynamic value) {
+    if (value == null) return 'Not scheduled';
+
+    final date = DateTime.tryParse(value.toString())?.toLocal();
+
+    if (date == null) return 'Not scheduled';
+
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    final hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
+    final minute = date.minute.toString().padLeft(2, '0');
+    final period = date.hour >= 12 ? 'PM' : 'AM';
+
+    return '${date.day} ${months[date.month - 1]} ${date.year} â€¢ '
+        '$hour:$minute $period';
+  }
+
+  String _formatSelectedDate(DateTime date) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+
+  String _money(dynamic value) {
+    final amount = double.tryParse(value?.toString() ?? '');
+
+    if (amount == null) return 'â€”';
+
+    return 'â‚¹${amount.toStringAsFixed(0)}';
+  }
+
+  Map<String, dynamic> _route(Map<String, dynamic> booking) {
+    final value = booking['route'];
+
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+
+    return {};
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleBookings = filteredBookings;
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text(
+          'My Bookings',
+          style: TextStyle(
+            color: AppColors.primary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+        elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Filter by date',
+            onPressed: _pickDate,
+            icon: const Icon(Icons.calendar_month),
+          ),
+          if (selectedDate != null)
+            IconButton(
+              tooltip: 'Clear date filter',
+              onPressed: _clearDateFilter,
+              icon: const Icon(Icons.filter_alt_off),
+            ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (selectedDate != null)
+            Container(
+              width: double.infinity,
+              color: AppColors.white,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.event, size: 18, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Date: ${_formatSelectedDate(selectedDate!)}',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _clearDateFilter,
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+            ),
+
+          SizedBox(
+            height: 58,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              scrollDirection: Axis.horizontal,
+              itemCount: filters.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final filter = filters[index];
+                final selected = selectedFilter == filter;
+
+                return ChoiceChip(
+                  label: Text(filter),
+                  selected: selected,
+                  onSelected: (_) {
+                    setState(() {
+                      selectedFilter = filter;
+                    });
+                  },
+                  selectedColor: AppColors.primary,
+                  backgroundColor: AppColors.white,
+                  labelStyle: TextStyle(
+                    color: selected ? Colors.white : AppColors.textDark,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              },
+            ),
+          ),
+
+          Expanded(child: _buildBody(visibleBookings)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(List<Map<String, dynamic>> visibleBookings) {
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
+              const SizedBox(height: 12),
+              const Text(
+                'Unable to load bookings',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(errorMessage!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _loadBookings,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Try Again'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (visibleBookings.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadBookings,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            const SizedBox(height: 100),
+            Icon(
+              Icons.receipt_long_outlined,
+              size: 64,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 16),
+            const Center(
+              child: Text(
+                'No bookings found',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                selectedDate != null
+                    ? 'No bookings found for this date.'
+                    : selectedFilter == 'All'
+                    ? 'Your bookings will appear here.'
+                    : 'No ${selectedFilter.toLowerCase()} bookings yet.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textGrey),
+              ),
+            ),
+            if (selectedDate != null) ...[
+              const SizedBox(height: 12),
+              Center(
+                child: TextButton(
+                  onPressed: _clearDateFilter,
+                  child: const Text('Clear date filter'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadBookings,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: visibleBookings.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, index) {
+          final booking = visibleBookings[index];
+
+          return _bookingCard(booking);
+        },
+      ),
+    );
+  }
+
+  Widget _bookingCard(Map<String, dynamic> booking) {
+    final route = _route(booking);
+    final status = _status(booking);
+    final statusColor = _statusColor(status);
+
+    final bookingId = booking['id']?.toString() ?? 'â€”';
+
+    final pickup = route['pickup_city']?.toString() ?? 'Pickup unavailable';
+
+    final drop = route['drop_city']?.toString() ?? 'Drop unavailable';
+
+    final tripType = (booking['trip_type'] ?? 'Trip').toString().replaceAll(
+      '_',
+      ' ',
+    );
+
+    final vehicle = (booking['preferred_vehicle_type'] ?? 'Vehicle')
+        .toString()
+        .toUpperCase();
+
+    return Material(
+      color: AppColors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          Navigator.push<bool>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BookingDetailScreen(booking: booking),
+            ),
+          ).then((wasCancelled) {
+            if (wasCancelled == true && mounted) {
+              _loadBookings();
+            }
+          });
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Booking #$bookingId',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: statusColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _prettyStatus(status),
+                      style: TextStyle(
+                        color: statusColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              _locationLine(Icons.trip_origin, pickup, Colors.green),
+
+              Padding(
+                padding: const EdgeInsets.only(left: 9),
+                child: Container(
+                  height: 17,
+                  width: 1.5,
+                  color: Colors.grey.shade300,
+                ),
+              ),
+
+              _locationLine(Icons.location_on, drop, Colors.red),
+
+              const Divider(height: 24),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${_prettyStatus(tripType)} â€¢ $vehicle',
+                      style: const TextStyle(
+                        color: AppColors.textGrey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _money(booking['estimated_fare']),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 8),
+
+              Row(
+                children: [
+                  const Icon(
+                    Icons.calendar_today_outlined,
+                    size: 14,
+                    color: AppColors.textGrey,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _formatDate(booking['scheduled_at']),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textGrey,
+                      ),
+                    ),
+                  ),
+                  const Text(
+                    'View details  â€º',
+                    style: TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _locationLine(IconData icon, String text, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textDark,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class BookingDetailScreen extends StatefulWidget {
+  final Map<String, dynamic> booking;
+
+  const BookingDetailScreen({super.key, required this.booking});
+
+  @override
+  State<BookingDetailScreen> createState() => _BookingDetailScreenState();
+}
+
+class _BookingDetailScreenState extends State<BookingDetailScreen> {
+  bool isCancelling = false;
+  bool isLoadingReview = true;
+  bool isSubmittingReview = false;
+
+  Map<String, dynamic>? existingReview;
+  String? reviewLoadError;
+
+  int selectedRating = 0;
+
+  final TextEditingController reviewController = TextEditingController();
+  @override
+  void initState() {
+    super.initState();
+
+    final status = (widget.booking['booking_status'] ?? '')
+        .toString()
+        .toLowerCase();
+
+    debugPrint('â­ Review initialization: $status');
+
+    if (status == 'completed') {
+      _loadExistingReview();
+    } else {
+      isLoadingReview = false;
+    }
+  }
+  Map<String, dynamic> get route {
+    final value = widget.booking['route'];
+
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+
+    return {};
+  }
+  @override
+  void dispose() {
+    reviewController.dispose();
+    super.dispose();
+  }
+
+  String _formatDate(dynamic value) {
+    if (value == null) return 'Not scheduled';
+
+    final date = DateTime.tryParse(value.toString())?.toLocal();
+
+    if (date == null) return 'Not scheduled';
+
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+
+    final hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
+    final minute = date.minute.toString().padLeft(2, '0');
+    final period = date.hour >= 12 ? 'PM' : 'AM';
+
+    return '${date.day} ${months[date.month - 1]} ${date.year}, '
+        '$hour:$minute $period';
+  }
+
+  String _money(dynamic value) {
+    final amount = double.tryParse(value?.toString() ?? '');
+
+    return amount == null ? 'â€”' : 'â‚¹${amount.toStringAsFixed(2)}';
+  }
+
+  Future<void> _cancelBooking() async {
+    final shouldCancel = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel booking?'),
+        content: const Text(
+          'Are you sure you want to cancel this booking? '
+          'This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep booking'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Cancel booking'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldCancel != true || !mounted) return;
+
+    final bookingId = int.tryParse(widget.booking['id'].toString());
+
+    if (bookingId == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Invalid booking ID')));
+      return;
+    }
+
+    setState(() {
+      isCancelling = true;
+    });
+
+    try {
+      await ApiService.cancelBooking(bookingId: bookingId);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Booking cancelled successfully')),
+      );
+
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isCancelling = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _loadExistingReview() async {
+    final bookingId = int.tryParse(widget.booking['id']?.toString() ?? '');
+
+    if (bookingId == null) {
+      setState(() {
+        isLoadingReview = false;
+        reviewLoadError = 'Invalid booking ID';
+      });
+      return;
+    }
+
+    try {
+      final result = await ApiService.getBookingReview(bookingId: bookingId);
+
+      if (!mounted) return;
+
+      setState(() {
+        existingReview = result;
+        selectedRating = result == null
+            ? 0
+            : int.tryParse(result['rating'].toString()) ?? 0;
+        reviewController.text = result?['review']?.toString() ?? '';
+        isLoadingReview = false;
+        reviewLoadError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isLoadingReview = false;
+        reviewLoadError = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _submitReview() async {
+    if (selectedRating < 1 || selectedRating > 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a star rating')),
+      );
+      return;
+    }
+
+    final bookingId = int.tryParse(widget.booking['id']?.toString() ?? '');
+
+    if (bookingId == null) return;
+
+    setState(() {
+      isSubmittingReview = true;
+    });
+
+    try {
+      final result = await ApiService.submitDriverReview(
+        bookingId: bookingId,
+        rating: selectedRating,
+        review: reviewController.text.trim().isEmpty
+            ? null
+            : reviewController.text.trim(),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        existingReview = result;
+        isSubmittingReview = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thank you! Your review was submitted.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isSubmittingReview = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
+  Widget _buildDriverReviewSection() {
+    return _section('Rate Your Driver', [
+      if (isLoadingReview)
+        const Center(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: CircularProgressIndicator(),
+          ),
+        )
+      else if (reviewLoadError != null)
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(reviewLoadError!, style: const TextStyle(color: Colors.red)),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  isLoadingReview = true;
+                  reviewLoadError = null;
+                });
+                _loadExistingReview();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+            ),
+          ],
+        )
+      else if (existingReview != null)
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'You have already rated this trip.',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: AppColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: List.generate(
+                5,
+                (index) => Icon(
+                  index < selectedRating ? Icons.star : Icons.star_border,
+                  color: Colors.amber,
+                  size: 28,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '$selectedRating out of 5 stars',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            if (reviewController.text.trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                reviewController.text,
+                style: const TextStyle(color: AppColors.textGrey),
+              ),
+            ],
+          ],
+        )
+      else
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'How was your ride?',
+              style: TextStyle(fontSize: 14, color: AppColors.textGrey),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(
+                5,
+                (index) => IconButton(
+                  onPressed: () {
+                    setState(() {
+                      selectedRating = index + 1;
+                    });
+                  },
+                  icon: Icon(
+                    index < selectedRating ? Icons.star : Icons.star_border,
+                    color: Colors.amber,
+                    size: 36,
+                  ),
+                ),
+              ),
+            ),
+            Center(
+              child: Text(
+                selectedRating == 0
+                    ? 'Select your rating'
+                    : '$selectedRating out of 5 stars',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: reviewController,
+              maxLength: 1000,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: 'Write your experience (optional)',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                contentPadding: const EdgeInsets.all(12),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: selectedRating == 0 || isSubmittingReview
+                    ? null
+                    : _submitReview,
+                icon: isSubmittingReview
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.send),
+                label: Text(
+                  isSubmittingReview ? 'Submitting...' : 'Submit Review',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ],
+        ),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = (widget.booking['booking_status'] ?? '').toString();
+    debugPrint('BOOKING STATUS: $status');
+    final statusColor = status == 'pending'
+        ? Colors.orange
+        : status == 'cancelled'
+        ? Colors.red
+        : status == 'completed'
+        ? Colors.teal
+        : Colors.blue;
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text('Booking #${widget.booking['id'] ?? ''}'),
+        backgroundColor: AppColors.white,
+        foregroundColor: AppColors.primary,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Booking Status',
+                    style: TextStyle(color: AppColors.textGrey),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    status.replaceAll('_', ' ').toUpperCase(),
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            _section('Journey Details', [
+              _detail('Pickup City', route['pickup_city']),
+              _detail('Pickup Address', route['pickup_address']),
+              _detail('Drop City', route['drop_city']),
+              _detail('Drop Address', route['drop_address']),
+              _detail(
+                'Distance',
+                route['distance_km'] == null
+                    ? null
+                    : '${route['distance_km']} km',
+              ),
+            ]),
+
+            const SizedBox(height: 16),
+
+            _section('Trip Information', [
+              _detail(
+                'Trip Type',
+                widget.booking['trip_type']?.toString().replaceAll('_', ' '),
+              ),
+              _detail('Vehicle', widget.booking['preferred_vehicle_type']),
+              _detail('Passengers', widget.booking['passenger_count']),
+              _detail(
+                'Pickup Date & Time',
+                _formatDate(widget.booking['scheduled_at']),
+              ),
+              if (widget.booking['return_at'] != null)
+                _detail(
+                  'Return Date & Time',
+                  _formatDate(widget.booking['return_at']),
+                ),
+              _detail(
+                'Special Instructions',
+                widget.booking['special_instructions'],
+              ),
+            ]),
+
+            const SizedBox(height: 16),
+
+            _section('Fare Details', [
+              _detail(
+                'Estimated Fare',
+                _money(widget.booking['estimated_fare']),
+              ),
+              _detail('Final Fare', _money(widget.booking['final_fare'])),
+            ]),
+            if (status.toLowerCase() == 'completed') ...[
+              const SizedBox(height: 16),
+              _buildDriverReviewSection(),
+            ],
+
+            const SizedBox(height: 16),
+
+            _section('Assignment Details', [
+              _detail('Driver ID', widget.booking['driver_id']),
+              _detail('Vehicle ID', widget.booking['vehicle_id']),
+            ]),
+
+            if (status == 'pending') ...[
+              const SizedBox(height: 20),
+
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: isCancelling ? null : _cancelBooking,
+                  icon: isCancelling
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cancel_outlined),
+                  label: Text(
+                    isCancelling ? 'Cancelling...' : 'Cancel Booking',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+
+            if (status == 'driver_assigned' || status == 'ongoing') ...[
+              const SizedBox(height: 20),
+
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    final bookingId = int.tryParse(
+                      widget.booking['id'].toString(),
+                    );
+
+                    if (bookingId == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invalid booking ID')),
+                      );
+                      return;
+                    }
+
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            LiveTrackingScreen(bookingId: bookingId),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.location_searching),
+                  label: const Text('Track Driver Live'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(String title, List<Widget> children) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textDark,
+            ),
+          ),
+          const Divider(height: 24),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  Widget _detail(String label, dynamic value) {
+    final display = value == null || value.toString().trim().isEmpty
+        ? 'â€”'
+        : value.toString();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            display,
+            style: const TextStyle(
+              color: AppColors.textDark,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+========== .\lib\core\services\api_service.dart ==========
+
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ApiService {
+  // Physical phone: use your computer's local IPv4 address.
+  // Android emulator: use 10.0.2.2 instead of localhost.
+  static const String baseUrl = 'http://192.168.29.201:8000';
+
+  static Future<Map<String, dynamic>> login({
+    required String phone,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'phone': phone,
+        'password': password,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('access_token', data['access_token']);
+      return data;
+    }
+
+    throw Exception(data['detail'] ?? 'Login failed');
+  }
+
+  static Future<Map<String, dynamic>> register({
+    required String fullName,
+    required String phone,
+    required String password,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'full_name': fullName,
+        'phone': phone,
+        'password': password,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('access_token', data['access_token']);
+      return data;
+    }
+
+    throw Exception(data['detail'] ?? 'Registration failed');
+  }
+
+  static Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+  }
+
+  static Future<String?> getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('access_token');
+  }
+
+  static Future<Map<String, dynamic>> getCurrentUser() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('No login session found');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/auth/me'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    if (response.statusCode == 401) {
+      await logout();
+      throw Exception('Session expired. Please login again.');
+    }
+
+    throw Exception('Unable to verify login session');
+  }
+
+  // Estimate ride fare.
+  static Future<Map<String, dynamic>> estimateFare({
+    required String tripType,
+    required String vehicleType,
+    required double distanceKm,
+    int passengerCount = 1,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/fares/estimate'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'trip_type': tripType,
+        'vehicle_type': vehicleType,
+        'distance_km': distanceKm,
+        'passenger_count': passengerCount,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return data as Map<String, dynamic>;
+    }
+
+    throw Exception(data['detail'] ?? 'Fare estimation failed');
+  }
+
+  // Create a passenger booking.
+  static Future<Map<String, dynamic>> createBooking({
+    required int passengerId,
+    required String tripType,
+    required String preferredVehicleType,
+    required String pickupCity,
+    required String dropCity,
+    required String pickupAddress,
+    required String dropAddress,
+    required double distanceKm,
+    required DateTime scheduledAt,
+    DateTime? returnAt,
+    int passengerCount = 1,
+    String? specialInstructions,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/bookings/'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'passenger_id': passengerId,
+        'trip_type': tripType,
+        'preferred_vehicle_type': preferredVehicleType,
+        'pickup_city': pickupCity,
+        'drop_city': dropCity,
+        'pickup_address': pickupAddress,
+        'drop_address': dropAddress,
+        'distance_km': distanceKm,
+        'scheduled_at': scheduledAt.toIso8601String(),
+        'return_at': returnAt?.toIso8601String(),
+        'passenger_count': passengerCount,
+        'special_instructions': specialInstructions,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return data as Map<String, dynamic>;
+    }
+
+    throw Exception(data['detail'] ?? 'Booking creation failed');
+  }
+
+  static Future<List<Map<String, dynamic>>> findNearbyDrivers({
+    required double latitude,
+    required double longitude,
+    required String vehicleType,
+    int passengerCount = 1,
+    double radiusKm = 10,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final uri = Uri.parse('$baseUrl/locations/nearby').replace(
+      queryParameters: {
+        'latitude': latitude.toString(),
+        'longitude': longitude.toString(),
+        'radius_km': radiusKm.toString(),
+        'passenger_count': passengerCount.toString(),
+        'vehicle_type': vehicleType,
+      },
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data as List)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to find nearby drivers'
+          : 'Unable to find nearby drivers',
+    );
+  }
+  // Get all bookings for the logged-in passenger.
+  static Future<List<Map<String, dynamic>>> getMyBookings() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/bookings/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data as List)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to load bookings'
+          : 'Unable to load bookings',
+    );
+  }
+
+  // Get road distance from the backend Google Routes endpoint.
+  // This method is intentionally declared only once.
+  static Future<double> getRouteDistanceKm({
+    required double pickupLatitude,
+    required double pickupLongitude,
+    required double dropLatitude,
+    required double dropLongitude,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/routes/distance'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'pickup_latitude': pickupLatitude,
+            'pickup_longitude': pickupLongitude,
+            'drop_latitude': dropLatitude,
+            'drop_longitude': dropLongitude,
+          }),
+        )
+        .timeout(const Duration(seconds: 12));
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return (data['distance_km'] as num).toDouble();
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Google Routes distance calculation failed'
+          : 'Google Routes distance calculation failed',
+    );
+  }
+  
+  // Get the assigned driver's latest location for a booking.
+  static Future<Map<String, dynamic>> getAssignedDriverLocation({
+    required int bookingId,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/locations/booking/$bookingId/driver'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to get driver location'
+          : 'Unable to get driver location',
+    );
+  }
+
+  
+  // Cancel a pending passenger booking.
+  static Future<Map<String, dynamic>> cancelBooking({
+      required int bookingId,
+    }) async {
+      final token = await getToken();
+
+      if (token == null || token.isEmpty) {
+        throw Exception('Please login first');
+      }
+
+      final response = await http.patch(
+        Uri.parse('$baseUrl/bookings/$bookingId/status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'booking_status': 'cancelled',
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return data as Map<String, dynamic>;
+      }
+
+      throw Exception(
+        data is Map
+            ? data['detail'] ?? 'Unable to cancel booking'
+            : 'Unable to cancel booking',
+      );
+  }
+
+
+  // Register Firebase device token with backend.
+  static Future<void> registerDeviceToken(String fcmToken) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/notifications/device-token'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'token': fcmToken,
+        'platform': 'android',
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Device token registration failed: ${response.body}');
+    }
+  }
+
+  // Remove Firebase device token on logout.
+  static Future<void> removeDeviceToken(String fcmToken) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) return;
+
+    final uri = Uri.parse('$baseUrl/notifications/device-token')
+        .replace(queryParameters: {'token': fcmToken});
+
+    final response = await http.delete(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Device token removal failed: ${response.body}');
+    }
+  }
+
+  // Fetch passenger notifications.
+  static Future<List<Map<String, dynamic>>> getNotifications() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/notifications/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as List;
+      return data
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    throw Exception('Unable to load notifications');
+  }
+
+  // Mark one notification as read.
+  static Future<void> markNotificationRead(int notificationId) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/notifications/$notificationId/read'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Unable to mark notification as read');
+    }
+  }
+
+  // Mark all notifications as read.
+  static Future<void> markAllNotificationsRead() async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/notifications/read-all'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Unable to mark all notifications as read');
+    }
+  }
+
+
+  // Update passenger profile.
+  static Future<Map<String, dynamic>> updateProfile({
+    required String fullName,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.patch(
+      Uri.parse('$baseUrl/auth/me'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'full_name': fullName.trim(),
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Profile update failed'
+          : 'Profile update failed',
+    );
+  }
+
+  // Submit a driver review after completing a trip.
+  static Future<Map<String, dynamic>> submitDriverReview({
+    required int bookingId,
+    required int rating,
+    String? review,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/reviews/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'booking_id': bookingId,
+        'rating': rating,
+        'review': review?.trim().isEmpty == true
+            ? null
+            : review?.trim(),
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return Map<String, dynamic>.from(data);
+    }
+
+    throw Exception(
+      data is Map
+          ? data['detail'] ?? 'Unable to submit review'
+          : 'Unable to submit review',
+    );
+  }
+
+  // Get the review submitted for a particular booking.
+  // Get the review submitted for a particular booking.
+static Future<Map<String, dynamic>?> getBookingReview({
+    required int bookingId,
+  }) async {
+    final token = await getToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('Please login first');
+    }
+
+    final uri = Uri.parse('$baseUrl/reviews/booking/$bookingId');
+
+    print('â­ Calling review API: $uri');
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 10));
+
+    print('â­ Review API status: ${response.statusCode}');
+    print('â­ Review API body: ${response.body}');
+
+    if (response.statusCode == 200) {
+      final body = response.body.trim();
+
+      if (body.isEmpty || body == 'null') {
+        return null;
+      }
+
+      final data = jsonDecode(body);
+      return Map<String, dynamic>.from(data);
+    }
+
+    final body = response.body.trim();
+    throw Exception(
+      body.isNotEmpty
+          ? (jsonDecode(body) is Map
+              ? jsonDecode(body)['detail'] ?? 'Unable to load review'
+              : 'Unable to load review')
+          : 'Unable to load review',
+    );
+  }
+}
+
+
+========== .\pubspec.yaml ==========
+
+name: passenger_app
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.0-327.4.beta
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+  http: ^1.6.0
+  shared_preferences: ^2.5.6
+  geolocator: ^14.1.2
+  google_maps_flutter: ^2.18.1
+  geocoding: ^3.0.0
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/app_icon.png
+    - assets/images/raahi_dzire_car.png
+    - assets/images/raahi_assets/brand/
+    - assets/images/raahi_assets/header/
+    - assets/images/raahi_assets/vehicles/
+    - assets/images/raahi_assets/destinations/
+
+  # To add assets to your application, add an assets section, like this:
+  # assets:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/app_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/app_icon.png"

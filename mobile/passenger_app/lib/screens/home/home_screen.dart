@@ -1,12 +1,9 @@
-
 import 'package:flutter/material.dart';
 
 import '../profile/profile_screen.dart';
-import '../booking/location_picker_screen.dart';
-import '../../core/services/api_service.dart';
-import '../booking/available_rides_screen.dart';
 import '../booking/my_bookings_screen.dart';
 import '../notifications/notifications_screen.dart';
+import '../booking/pickup_location_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,376 +13,353 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Temporary frontend-only distance used only when Google Routes fails.
-  static const double _fallbackDistanceKm = 100.0;
+  static const Color green = Color(0xFF079B80);
+  static const Color dark = Color(0xFF151D2B);
+  static const Color background = Color(0xFFF8FAFB);
 
-  String selectedRide = 'Local';
-  String selectedVehicle = 'dzire';
-  bool isSearching = false;
+  // home_hero.png already contains the car. Do not overlay a second car.
+  static const String heroImage =
+      'assets/images/raahi_assets/header/home_hero.png';
+  static const String logoImage =
+      'assets/images/raahi_assets/brand/raahi_logo.png';
 
-  final TextEditingController pickupController =
-      TextEditingController();
-
-  final TextEditingController destinationController =
-      TextEditingController();
-
-  Map<String, double>? selectedCoordinates;
-  String? distanceSource;
-
-  // Readable route details returned by LocationPickerScreen.
-  String pickupAddress = '';
-  String dropAddress = '';
-  String pickupCity = '';
-  String dropCity = '';
-
-  final List<Map<String, dynamic>> vehicles = [
+  // Popular destination photos (replace filenames only if your asset names differ).
+  static const List<Map<String, String>> destinations = [
     {
-      'id': 'dzire',
-      'name': 'Dzire',
-      'seats': '4 Seater',
-      'icon': Icons.directions_car,
-      'asset': 'assets/images/raahi_assets/vehicles/dzire.png',
+      'name': 'Ujjain',
+      'detail': 'Mahakaleshwar Temple & Shipra River',
+      'image': 'assets/images/raahi_assets/destinations/ujjain.png',
     },
     {
-      'id': 'eeco',
-      'name': 'Eeco',
-      'seats': '7 Seater',
-      'icon': Icons.airport_shuttle,
-      'asset': 'assets/images/raahi_assets/vehicles/eeco.png',
+      'name': 'Indore',
+      'detail': 'Rajwada Palace',
+      'image': 'assets/images/raahi_assets/destinations/indore.png',
     },
     {
-      'id': 'ertiga',
-      'name': 'Ertiga',
-      'seats': '6 Seater',
-      'icon': Icons.directions_car_filled,
-      'asset': 'assets/images/raahi_assets/vehicles/ertiga.png',
+      'name': 'Dewas',
+      'detail': 'Chamunda Mata Tekri',
+      'image': 'assets/images/raahi_assets/destinations/dewas.png',
     },
     {
-      'id': 'innova',
-      'name': 'Innova',
-      'seats': '7 Seater',
-      'icon': Icons.airport_shuttle,
-      'asset': 'assets/images/raahi_assets/vehicles/innova.png',
+      'name': 'Bhopal',
+      'detail': 'Upper Lake & Taj-ul-Masajid',
+      'image': 'assets/images/raahi_assets/destinations/bhopal.png',
     },
     {
-      'id': 'urbania',
-      'name': 'Urbania',
-      'seats': '17 Seater',
-      'icon': Icons.directions_bus,
-      'asset': 'assets/images/raahi_assets/vehicles/urbania.png',
+      'name': 'Jabalpur',
+      'detail': 'Bhedaghat Marble Rocks',
+      'image': 'assets/images/raahi_assets/destinations/jabalpur.png',
+    },
+    {
+      'name': 'Udaipur',
+      'detail': 'Lake Pichola & City Palace',
+      'image': 'assets/images/raahi_assets/destinations/udaipur.png',
+    },
+    {
+      'name': 'Baglamukhi',
+      'detail': 'Maa Baglamukhi Temple, Nalkheda',
+      'image': 'assets/images/raahi_assets/destinations/baglamukhi.png',
+    },
+    {
+      'name': 'Pachmarhi',
+      'detail': 'Hill station & waterfalls',
+      'image': 'assets/images/raahi_assets/destinations/pachmarhi.png',
+    },
+    {
+      'name': 'Omkareshwar',
+      'detail': 'Omkareshwar Temple & Narmada River',
+      'image': 'assets/images/raahi_assets/destinations/omkareshwar.png',
     },
   ];
 
-  @override
-  void dispose() {
-    pickupController.dispose();
-    destinationController.dispose();
-    super.dispose();
-  }
+  // Promotion banner artwork: temple_1.png through temple_6.png are
+  // promotional banners, not destination or route photos.
+  static const List<String> promotionImages = [
+    'assets/images/raahi_assets/destinations/temple_1.png',
+    'assets/images/raahi_assets/destinations/temple_2.png',
+    'assets/images/raahi_assets/destinations/temple_3.png',
+    'assets/images/raahi_assets/destinations/temple_4.png',
+    'assets/images/raahi_assets/destinations/temple_5.png',
+    'assets/images/raahi_assets/destinations/temple_6.png',
+  ];
 
-  Future<void> _openMapPicker() async {
+  String selectedCity = 'Ujjain';
+  int currentPromotionIndex = 0;
+
+  final List<Map<String, dynamic>> tripTypes = [
+    {
+      'title': 'Local\nRides',
+      'icon': Icons.directions_car_filled_rounded,
+      'color': Color(0xFFDDF7F0),
+      'iconColor': Color(0xFF079B80),
+    },
+    {
+      'title': 'Intercity\nTravel',
+      'icon': Icons.route_rounded,
+      'color': Color(0xFFE0F3FC),
+      'iconColor': Color(0xFF087C9C),
+    },
+    {
+      'title': 'Round\nTrips',
+      'icon': Icons.sync_rounded,
+      'color': Color(0xFFFFF4DF),
+      'iconColor': Color(0xFFD39116),
+    },
+    {
+      'title': 'Religious\nTours',
+      'icon': Icons.temple_hindu_rounded,
+      'color': Color(0xFFF0E8FC),
+      'iconColor': Color(0xFF7040A5),
+    },
+  ];
+
+
+  Future<void> _startBookingFlow() async {
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
-      MaterialPageRoute(
-        builder: (_) => const LocationPickerScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const PickupLocationScreen()),
     );
 
-    if (!mounted || result == null) return;
-
-    final pickupLat =
-        (result['pickup_latitude'] as num?)?.toDouble();
-    final pickupLng =
-        (result['pickup_longitude'] as num?)?.toDouble();
-    final dropLat =
-        (result['drop_latitude'] as num?)?.toDouble();
-    final dropLng =
-        (result['drop_longitude'] as num?)?.toDouble();
-
-    final newPickupAddress =
-        result['pickup_address']?.toString().trim() ?? '';
-    final newDropAddress =
-        result['drop_address']?.toString().trim() ?? '';
-    final newPickupCity =
-        result['pickup_city']?.toString().trim() ?? '';
-    final newDropCity =
-        result['drop_city']?.toString().trim() ?? '';
-
-    if (pickupLat == null ||
-        pickupLng == null ||
-        dropLat == null ||
-        dropLng == null) {
-      return;
-    }
-
-    setState(() {
-      selectedCoordinates = {
-        'pickup_latitude': pickupLat,
-        'pickup_longitude': pickupLng,
-        'drop_latitude': dropLat,
-        'drop_longitude': dropLng,
-      };
-
-      pickupAddress = newPickupAddress;
-      dropAddress = newDropAddress;
-      pickupCity = newPickupCity;
-      dropCity = newDropCity;
-
-      pickupController.text = pickupAddress.isNotEmpty
-          ? pickupAddress
-          : '${pickupLat.toStringAsFixed(5)}, ${pickupLng.toStringAsFixed(5)}';
-
-      destinationController.text = dropAddress.isNotEmpty
-          ? dropAddress
-          : '${dropLat.toStringAsFixed(5)}, ${dropLng.toStringAsFixed(5)}';
-
-      distanceSource = null;
-    });
-  }
-
-  
-String get _tripTypeValue =>
-      selectedRide.toLowerCase().replaceAll(' ', '_');
-
-  Future<double> _getDistanceForSelectedRoute() async {
-    // Always try the actual road distance first.
-    try {
-      final distanceKm = await ApiService.getRouteDistanceKm(
-        pickupLatitude: selectedCoordinates!['pickup_latitude']!,
-        pickupLongitude: selectedCoordinates!['pickup_longitude']!,
-        dropLatitude: selectedCoordinates!['drop_latitude']!,
-        dropLongitude: selectedCoordinates!['drop_longitude']!,
+    if (result != null && mounted) {
+      debugPrint('Selected pickup: ${result['pickup_address']}');
+      debugPrint(
+        'Pickup coordinates: '
+        '${result['pickup_latitude']}, '
+        '${result['pickup_longitude']}',
       );
-
-      if (distanceKm <= 0 || distanceKm > 2000) {
-        throw Exception('Google returned an invalid distance.');
-      }
-
-      if (!mounted) throw Exception('Screen is no longer active.');
-
-      setState(() {
-        distanceSource = 'Google Routes';
-      });
-      return distanceKm;
-    } catch (_) {
-      // This is a temporary estimate, not the route's actual road distance.
-      if (!mounted) throw Exception('Screen is no longer active.');
-
-      setState(() {
-        distanceSource = 'Temporary default';
-      });
-      return _fallbackDistanceKm;
     }
   }
 
-  Future<void> _searchRides() async {
-    if (selectedCoordinates == null) {
-      _showMessage('Please select pickup and destination on Google Maps');
-      return;
-    }
-
-    if (pickupAddress.isEmpty ||
-        dropAddress.isEmpty ||
-        pickupCity.isEmpty ||
-        dropCity.isEmpty) {
-      _showMessage(
-        'Please reselect both locations so their addresses can be identified.',
-      );
-      return;
-    }
-
-    setState(() {
-      isSearching = true;
-    });
-
-    try {
-      // Calculate distance before searching for drivers.
-      final distanceKm = await _getDistanceForSelectedRoute();
-
-      if (!mounted) return;
-
-      final drivers = await ApiService.findNearbyDrivers(
-        latitude: selectedCoordinates!['pickup_latitude']!,
-        longitude: selectedCoordinates!['pickup_longitude']!,
-        vehicleType: selectedVehicle,
-        passengerCount: 1,
-        radiusKm: 10,
-      );
-
-      if (!mounted) return;
-
-      if (drivers.isEmpty) {
-        _showMessage('No available drivers found within 10 km');
-        return;
-      }
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => AvailableRidesScreen(
-            drivers: drivers,
-            distanceKm: distanceKm,
-            tripType: _tripTypeValue,
-            vehicleModel: selectedVehicle,
-            pickupAddress: pickupAddress,
-            dropAddress: dropAddress,
-            pickupCity: pickupCity,
-            dropCity: dropCity,
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        _showMessage(e.toString().replaceFirst('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          isSearching = false;
-        });
-      }
-    }
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
   }
 
   void _openNotifications() {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => const NotificationsScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const NotificationsScreen()),
     );
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+  void _openProfile() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ProfileScreen()),
     );
   }
 
-  static const Color _green = Color(0xFF078B4B);
-  static const Color _deepGreen = Color(0xFF006B4A);
-  static const Color _ink = Color(0xFF111827);
-  static const Color _line = Color(0xFFE1E7EC);
+  void _openBookings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MyBookingsScreen()),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9FA),
+      backgroundColor: background,
       body: SafeArea(
         bottom: false,
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.only(bottom: 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHeroHeader(),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                      child: _buildBookingPanel(),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final screenHeight = constraints.maxHeight;
+            final screenWidth = constraints.maxWidth;
+
+            return Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildHero(screenHeight, screenWidth),
+                        Transform.translate(
+                          offset: const Offset(0, 0),
+                          child: Column(
+                            children: [
+                              _buildLocationCard(),
+                              _buildTripTypes(),
+                              _buildPopularDestinations(),
+                              const SizedBox(height: 8),
+                              _buildPromotionBanner(),
+                              const SizedBox(height: 18),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    _buildVehicleSection(),
-                    _buildDestinationSection(),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-            SafeArea(
-              top: false,
-              child: _buildBottomNavigation(),
-            ),
-          ],
+                _buildBottomNavigation(),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 
-  Widget _buildHeroHeader() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 22),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFBDEFFF), Color(0xFFEAF9FF), Color(0xFFF7F9FA)],
-          stops: [0, 0.62, 1],
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  // HERO: use the complete home hero asset; it already includes the car.
+  Widget _buildHero(double screenHeight, double screenWidth) {
+    final heroHeight = (screenHeight * 0.245).clamp(185.0, 220.0);
+
+    return SizedBox(
+      height: heroHeight,
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.menu_rounded, color: _ink, size: 27),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Image.asset(
-                    'assets/images/raahi_assets/brand/raahi_logo.png',
-                    width: 140,
-                    height: 48,
-                    fit: BoxFit.contain,
-                    alignment: Alignment.centerLeft,
+          Positioned.fill(
+            child: Image.asset(
+              heroImage,
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              errorBuilder: (_, __, ___) => const ColoredBox(
+                color: Color(0xFFEAF7F8),
+              ),
+            ),
+          ),
+
+          // Gentle lower fade so the location card blends into the hero.
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.02),
+                    Colors.white.withValues(alpha: 0.02),
+                    const Color(0xFFE8F8F7).withValues(alpha: 0.45),
+                  ],
+                  stops: const [0, 0.65, 1],
+                ),
+              ),
+            ),
+          ),
+
+          Positioned(
+            top: 8,
+            left: 18,
+            right: 18,
+            child: Row(
+              children: [
+                InkWell(
+                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Menu coming soon')),
+                  ),
+                  borderRadius: BorderRadius.circular(24),
+                  child: const SizedBox(
+                    width: 34,
+                    height: 42,
+                    child: Icon(Icons.menu_rounded, size: 29, color: dark),
                   ),
                 ),
-              ),
-              _roundHeaderAction(
-                Icons.notifications_none_rounded,
-                () => _openNotifications(),
-              ),
-              const SizedBox(width: 9),
-              _roundHeaderAction(
-                Icons.person_rounded,
-                () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Image.asset(
+                      logoImage,
+                      height: 42,
+                      fit: BoxFit.contain,
+                      alignment: Alignment.centerLeft,
+                      errorBuilder: (_, __, ___) => const Text(
+                        'Raahi',
+                        style: TextStyle(
+                          color: dark,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                filled: true,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'Hi, Kuldeep 👋',
-            style: TextStyle(
-              color: _ink,
-              fontSize: 23,
-              fontWeight: FontWeight.w900,
+                _headerButton(Icons.notifications_none_rounded, _openNotifications),
+              ],
             ),
           ),
-          const SizedBox(height: 2),
-          const Text(
-            'Where would you like to go today?',
-            style: TextStyle(
-              color: Color(0xFF17212B),
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              height: 58,
-              width: double.infinity,
-              child: Image.asset(
-                'assets/images/raahi_assets/header/temple_header.png',
-                fit: BoxFit.contain,
-                alignment: Alignment.centerRight,
+
+          Positioned(
+            left: 22,
+            top: heroHeight * 0.23,
+            right: screenWidth * 0.30,
+            child: const Text(
+              'Hello, Kuldeep 👋',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: dark,
+                fontSize: 21,
+                fontWeight: FontWeight.w900,
               ),
             ),
           ),
+
+          Positioned(
+            left: 22,
+            top: heroHeight * 0.38,
+            right: screenWidth * 0.28,
+            child: const Text(
+              'Book your ride for local, intercity\nand religious travel',
+              style: TextStyle(
+                color: dark,
+                fontSize: 13.5,
+                height: 1.28,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+
+          Positioned(
+            left: 22,
+            bottom: 17,
+            child: InkWell(
+              onTap: _showCityPicker,
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.10),
+                      blurRadius: 9,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.location_on, color: green, size: 20),
+                    const SizedBox(width: 6),
+                    Text(
+                      selectedCity,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: dark,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.keyboard_arrow_down_rounded, size: 21),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
         ],
       ),
     );
   }
 
-  Widget _roundHeaderAction(IconData icon, VoidCallback onTap, {bool filled = false}) {
+  Widget _headerButton(IconData icon, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(30),
@@ -393,478 +367,319 @@ String get _tripTypeValue =>
         width: 39,
         height: 39,
         decoration: BoxDecoration(
-          color: filled ? _green : Colors.white.withValues(alpha: 0.65),
+          color: Colors.white.withValues(alpha: 0.90),
           shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
-            ),
-          ],
         ),
-        child: Icon(icon, color: filled ? Colors.white : _ink, size: 23),
+        child: Icon(icon, color: dark, size: 24),
       ),
     );
   }
 
-  Widget _buildBookingPanel() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(15, 14, 15, 16),
-      decoration: BoxDecoration(
+  void _showCityPicker() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final cities = ['Ujjain', 'Indore', 'Dewas', 'Bhopal', 'Jabalpur', 'Udaipur'];
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Choose your city',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                ...cities.map(
+                  (city) => ListTile(
+                    leading: const Icon(Icons.location_on_outlined, color: green),
+                    title: Text(city),
+                    trailing: selectedCity == city
+                        ? const Icon(Icons.check_circle, color: green)
+                        : null,
+                    onTap: () {
+                      setState(() => selectedCity = city);
+                      Navigator.pop(context);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // PICKUP AND DESTINATION CARD
+  Widget _buildLocationCard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: Material(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(27),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF182B36).withValues(alpha: 0.13),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            height: 49,
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0F2F4),
-              borderRadius: BorderRadius.circular(28),
-            ),
-            child: Row(
+        elevation: 5,
+        shadowColor: Colors.black.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(25),
+        child: InkWell(
+          onTap: _startBookingFlow,
+          borderRadius: BorderRadius.circular(25),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 10, 4),
+            child: Column(
               children: [
-                Expanded(
-                  child: _bookingTab(
-                    icon: Icons.directions_car_filled_rounded,
-                    label: 'Book a Ride',
-                    selected: true,
-                    onTap: () {},
-                  ),
+                _locationRow(
+                  icon: Icons.circle,
+                  iconColor: green,
+                  title: 'Pickup Location',
+                  subtitle: 'My Current Location',
+                  onTap: _startBookingFlow,
                 ),
-                Expanded(
-                  child: _bookingTab(
-                    icon: Icons.directions_bus_rounded,
-                    label: 'Tour & Travels',
-                    selected: false,
-                    onTap: () => _showMessage('Tour & Travels coming soon'),
-                  ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 38),
+                  child: Divider(height: 1, thickness: 1, color: Colors.grey.shade300),
+                ),
+                _locationRow(
+                  icon: Icons.location_on,
+                  iconColor: const Color(0xFFE9273D),
+                  title: 'Where to?',
+                  subtitle: 'Enter destination, city or place',
+                  onTap: _startBookingFlow,
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 14),
-          _referenceLocationField(
-            controller: pickupController,
-            hint: 'Pickup Location',
-            leading: const Icon(Icons.circle, color: Color(0xFF23B34B), size: 19),
-            trailing: IconButton(
-              onPressed: _openMapPicker,
-              icon: const Icon(Icons.my_location_rounded, color: _deepGreen),
-              tooltip: 'Choose pickup and destination on map',
-            ),
-          ),
-          const SizedBox(height: 9),
-          _referenceLocationField(
-            controller: destinationController,
-            hint: 'Destination',
-            leading: const Icon(Icons.location_on, color: Colors.red, size: 22),
-            trailing: IconButton(
-              onPressed: _openMapPicker,
-              icon: const Icon(Icons.swap_vert_rounded, color: _deepGreen),
-              tooltip: 'Choose destination on map',
-            ),
-          ),
-          const SizedBox(height: 14),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _referenceTripCard('Local', Icons.directions_car_filled_rounded),
-                const SizedBox(width: 8),
-                _referenceTripCard('Intercity', Icons.alt_route_rounded),
-                const SizedBox(width: 8),
-                _referenceTripCard('Round Trip', Icons.sync_rounded),
-                const SizedBox(width: 8),
-                _referenceTripCard('Religious Tour', Icons.temple_hindu_rounded),
-              ],
-            ),
-          ),
-          const SizedBox(height: 17),
-          SizedBox(
-            width: double.infinity,
-            height: 55,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF49D20A), Color(0xFF00865B), Color(0xFF006B51)],
-                ),
-                borderRadius: BorderRadius.circular(30),
-                boxShadow: [
-                  BoxShadow(
-                    color: _green.withValues(alpha: 0.20),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ElevatedButton(
-                onPressed: isSearching ? null : _searchRides,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.transparent,
-                  disabledBackgroundColor: Colors.transparent,
-                  shadowColor: Colors.transparent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                ),
-                child: isSearching
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                      )
-                    : const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            'Find Available Rides',
-                            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-                          ),
-                          SizedBox(width: 12),
-                          Icon(Icons.arrow_forward_rounded, size: 24),
-                        ],
-                      ),
-              ),
-            ),
-          ),
-          if (distanceSource != null) ...[
-            const SizedBox(height: 9),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                distanceSource == 'Google Routes'
-                    ? 'Road distance calculated by Google Routes'
-                    : 'Temporary estimate: 100 km (Google Routes unavailable)',
-                style: TextStyle(
-                  color: distanceSource == 'Temporary default'
-                      ? const Color(0xFF9A6A21)
-                      : Colors.blueGrey,
-                  fontSize: 10,
-                ),
-              ),
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _bookingTab({
+  Widget _locationRow({
     required IconData icon,
-    required String label,
-    required bool selected,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
     required VoidCallback onTap,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(25),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: selected
-              ? const LinearGradient(colors: [Color(0xFF48D20A), Color(0xFF007D59)])
-              : null,
-          borderRadius: BorderRadius.circular(25),
-          boxShadow: selected
-              ? [BoxShadow(color: _green.withValues(alpha: 0.25), blurRadius: 5, offset: const Offset(0, 2))]
-              : null,
-        ),
+      child: SizedBox(
+        height: 43,
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: selected ? Colors.white : _deepGreen, size: 23),
-            const SizedBox(width: 7),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected ? Colors.white : _ink,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                ),
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor, size: 22),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: dark,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
               ),
             ),
+            if (title == 'Pickup Location')
+              IconButton(
+                onPressed: onTap,
+                icon: const Icon(Icons.my_location_rounded, color: dark, size: 23),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _referenceLocationField({
-    required TextEditingController controller,
-    required String hint,
-    required Widget leading,
-    required Widget trailing,
-  }) {
-    return Container(
-      height: 52,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _line, width: 1.2),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          const SizedBox(width: 12),
-          leading,
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              onChanged: (_) {
-                setState(() {
-                  selectedCoordinates = null;
-                  distanceSource = null;
-                  if (controller == pickupController) {
-                    pickupAddress = '';
-                    pickupCity = '';
-                  } else {
-                    dropAddress = '';
-                    dropCity = '';
-                  }
-                });
-              },
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: const TextStyle(color: Color(0xFF4B5563), fontSize: 15),
-                border: InputBorder.none,
-                isDense: true,
-              ),
-              style: const TextStyle(fontSize: 15, color: _ink),
-            ),
-          ),
-          trailing,
-          const SizedBox(width: 5),
-        ],
-      ),
-    );
-  }
-
-  Widget _referenceTripCard(String label, IconData icon) {
-    final selected = selectedRide == label;
-    return InkWell(
-      onTap: () => setState(() => selectedRide = label),
-      borderRadius: BorderRadius.circular(17),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: label == 'Religious Tour' ? 132 : 105,
-        height: 83,
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFFE4F9E9) : const Color(0xFFFCFDFE),
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(
-            color: selected ? const Color(0xFF20B943) : const Color(0xFFE5E9ED),
-            width: selected ? 1.7 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 6,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: const Color(0xFF087D37), size: 27),
-            const SizedBox(height: 5),
-            FittedBox(
-              child: Text(
-                label,
-                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVehicleSection() {
+  // TRIP TYPE TILES
+  Widget _buildTripTypes() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Choose Your Vehicle',
-                    style: TextStyle(color: _ink, fontSize: 20, fontWeight: FontWeight.w900),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+      child: Row(
+        children: tripTypes.map((trip) {
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: InkWell(
+                onTap: _startBookingFlow,
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: trip['color'] as Color,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        trip['icon'] as IconData,
+                        color: trip['iconColor'] as Color,
+                        size: 31,
+                      ),
+                      const SizedBox(height: 7),
+                      Text(
+                        trip['title'] as String,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: dark,
+                          fontSize: 12,
+                          height: 1.12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const Text('View All  ›', style: TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 130,
-            child: ListView.separated(
-              padding: const EdgeInsets.only(right: 2),
-              scrollDirection: Axis.horizontal,
-              itemCount: vehicles.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final vehicle = vehicles[index];
-                return _referenceVehicleCard(
-                  id: vehicle['id'],
-                  name: vehicle['name'],
-                  seats: vehicle['seats'],
-                  icon: vehicle['icon'],
-                  asset: vehicle['asset'],
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _referenceVehicleCard({
-    required String id,
-    required String name,
-    required String seats,
-    required IconData icon,
-    required String asset,
-  }) {
-    final selected = selectedVehicle == id;
-    return GestureDetector(
-      onTap: () => setState(() => selectedVehicle = id),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: 112,
-        padding: const EdgeInsets.fromLTRB(7, 8, 7, 7),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFFE9F9EF) : Colors.white,
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: selected ? const Color(0xFF20B943) : _line, width: selected ? 1.6 : 1),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.07), blurRadius: 7, offset: const Offset(0, 3)),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              height: 59,
-              width: double.infinity,
-              child: Image.asset(
-                asset,
-                fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => Icon(icon, size: 48, color: _deepGreen),
               ),
             ),
-            Text(name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: _ink)),
-            const SizedBox(height: 3),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.person_outline_rounded, size: 15),
-                const SizedBox(width: 3),
-                Flexible(child: Text(seats, maxLines: 1, style: const TextStyle(fontSize: 10, color: _ink))),
-              ],
-            ),
-          ],
-        ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildDestinationSection() {
-    final destinations = [
-      {'name': 'Ujjain', 'sub': '(Mahakal)', 'asset': 'assets/images/raahi_assets/destinations/ujjain.png'},
-      {'name': 'Indore', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/indore.png'},
-      {'name': 'Dewas', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/dewas.png'},
-      {'name': 'Omkareshwar', 'sub': '', 'asset': 'assets/images/raahi_assets/destinations/omkareshwar.png'},
-    ];
+  // POPULAR DESTINATIONS: compact horizontal cards, all nine requested places.
+  Widget _buildPopularDestinations() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Row(
-              children: const [
-                Icon(Icons.location_on_rounded, color: Color(0xFF20B943), size: 25),
-                SizedBox(width: 5),
-                Expanded(
-                  child: Text('Popular Destinations', style: TextStyle(color: _ink, fontSize: 19, fontWeight: FontWeight.w900)),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Popular Destinations',
+                  style: TextStyle(
+                    color: dark,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
-                Text('View All  ›', style: TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700)),
-              ],
-            ),
+              ),
+              TextButton(
+                onPressed: () => _showMessage('All destinations are shown below'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Row(
+                  children: [
+                    Text(
+                      'View All',
+                      style: TextStyle(
+                        color: green,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.arrow_forward_rounded, color: green, size: 20),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 11),
+          const SizedBox(height: 7),
           SizedBox(
-            height: 128,
+            height: 105,
             child: ListView.separated(
-              padding: const EdgeInsets.only(right: 2),
               scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               itemCount: destinations.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 9),
+              separatorBuilder: (_, __) => const SizedBox(width: 7),
               itemBuilder: (context, index) {
-                final destination = destinations[index];
-                final city = destination['name'] as String;
+                final place = destinations[index];
                 return InkWell(
-                  onTap: () {
-                    setState(() {
-                      destinationController.text = city;
-                      dropAddress = city;
-                      dropCity = city;
-                      selectedCoordinates = null;
-                      distanceSource = null;
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(17),
+                  onTap: _startBookingFlow,
+                  borderRadius: BorderRadius.circular(13),
                   child: Container(
-                    width: 124,
+                    width: 116,
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(17),
-                      border: Border.all(color: _line),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(color: const Color(0xFFE6EBEF)),
                       boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 3)),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.045),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
                       ],
                     ),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Container(
-                            width: double.infinity,
-                            child: Image.asset(
-                              destination['asset'] as String,
-                              width: double.infinity,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const Icon(Icons.place_rounded, color: _green, size: 48),
+                        SizedBox(
+                          height: 56,
+                          width: double.infinity,
+                          child: Image.asset(
+                            place['image']!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: const Color(0xFFEAF4F4),
+                              alignment: Alignment.center,
+                              child: const Icon(
+                                Icons.temple_hindu_rounded,
+                                color: green,
+                                size: 30,
+                              ),
                             ),
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(3, 5, 3, 6),
+                          padding: const EdgeInsets.fromLTRB(7, 4, 6, 3),
                           child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(city, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: _ink)),
-                              if ((destination['sub'] as String).isNotEmpty)
-                                Text(destination['sub'] as String, style: const TextStyle(fontSize: 10, color: _ink)),
+                              Text(
+                                place['name']!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: dark,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                place['detail']!,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.blueGrey.shade600,
+                                  fontSize: 9,
+                                  height: 1.05,
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -880,55 +695,178 @@ String get _tripTypeValue =>
     );
   }
 
-  Widget _buildBottomNavigation() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.09), blurRadius: 15, offset: const Offset(0, -4)),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+  // PROMOTION BANNERS: temple_1.png through temple_6.png are banner images.
+  // They are displayed as a swipeable carousel, not as destination cards.
+  Widget _buildPromotionBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+      child: Column(
         children: [
-          _bottomNavItem(Icons.home_filled, 'Home', true, () {}),
-          _bottomNavItem(Icons.calendar_month_rounded, 'My Bookings', false, () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const MyBookingsScreen()));
-          }),
-          _bottomNavItem(Icons.notifications_none_rounded, 'Notifications', false, () {
-            _openNotifications();
-          }),
-          _bottomNavItem(Icons.person_outline_rounded, 'Profile', false, () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
-          }),
+          SizedBox(
+            height: 115,
+            child: PageView.builder(
+              itemCount: promotionImages.length,
+              onPageChanged: (index) {
+                setState(() => currentPromotionIndex = index);
+              },
+              itemBuilder: (context, index) {
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SizedBox.expand(
+                    child: Image.asset(
+                      promotionImages[index],
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const ColoredBox(
+                        color: Color(0xFFEAF4F4),
+                        child: Center(
+                          child: Icon(
+                            Icons.local_offer_rounded,
+                            color: green,
+                            size: 28,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 7),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+              promotionImages.length,
+              (index) => AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: currentPromotionIndex == index ? 13 : 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: currentPromotionIndex == index
+                      ? green
+                      : const Color(0xFFCAD3DA),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _bottomNavItem(IconData icon, String label, bool selected, VoidCallback onTap) {
-    final color = selected ? _green : const Color(0xFF111827);
+  // BOTTOM NAVIGATION: same five destinations and existing callbacks.
+  Widget _buildBottomNavigation() {
+    return Container(
+      height: 76,
+      padding: const EdgeInsets.fromLTRB(5, 5, 5, 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.09),
+            blurRadius: 14,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _navItem(Icons.home_filled, 'Home', true, () {}),
+          _navItem(
+            Icons.calendar_month_outlined,
+            'My Bookings',
+            false,
+            _openBookings,
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: _startBookingFlow,
+              child: Transform.translate(
+                offset: const Offset(0, -15),
+                child: Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    color: green,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: green.withValues(alpha: 0.22),
+                        blurRadius: 9,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: const Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.directions_car_filled_rounded,
+                        color: Colors.white,
+                        size: 27,
+                      ),
+                      SizedBox(height: 1),
+                      Text(
+                        'Book Ride',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          _navItem(
+            Icons.account_balance_wallet_outlined,
+            'Payments',
+            false,
+            () => _showMessage('Payments coming soon'),
+          ),
+          _navItem(
+            Icons.person_outline_rounded,
+            'Profile',
+            false,
+            _openProfile,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _navItem(
+    IconData icon,
+    String label,
+    bool selected,
+    VoidCallback onTap,
+  ) {
+    final color = selected ? green : dark;
     return Expanded(
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(15),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 54,
-              height: 36,
-              decoration: BoxDecoration(
-                color: selected ? const Color(0xFFD5F7E3) : Colors.transparent,
-                borderRadius: BorderRadius.circular(25),
-              ),
-              child: Icon(icon, color: color, size: 25),
-            ),
+            Icon(icon, color: color, size: 25),
             const SizedBox(height: 3),
-            Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: color, fontSize: 10, fontWeight: selected ? FontWeight.w800 : FontWeight.w500)),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 9.5,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+              ),
+            ),
           ],
         ),
       ),

@@ -1,31 +1,28 @@
-
-import 'dart:async';
 import 'package:flutter/material.dart';
+import 'onboarding_screen.dart';
 
-import '../../core/constants/app_colors.dart';
-import '../auth/auth_gate.dart';
-
-class SplashScreen extends StatefulWidget {
+class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
 
-  @override
-  State<SplashScreen> createState() => _SplashScreenState();
-}
+  // Keep these paths aligned with the filenames in pubspec.yaml.
+  static const String logoAsset =
+      'assets/images/raahi_assets/brand/raahi_logo_vertical.png';
 
-class _SplashScreenState extends State<SplashScreen> {
-  @override
-  void initState() {
-    super.initState();
+  static const String skylineAsset =
+      'assets/images/raahi_assets/header/city_skyline55.png';
 
-    Timer(const Duration(seconds: 3), () {
-      if (!mounted) return;
+  static const String carAsset =
+      'assets/images/raahi_assets/header/White_Suzuki_Dzire.png';
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const AuthGate(),
-        ),
-      );
-    });
+  static const Color navy = Color(0xFF073B5C);
+  static const Color teal = Color(0xFF08B69D);
+
+  void _getStarted(BuildContext context) {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => const OnboardingScreen(),
+      ),
+    );
   }
 
   @override
@@ -35,151 +32,176 @@ class _SplashScreenState extends State<SplashScreen> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
+            final width = constraints.maxWidth;
             final height = constraints.maxHeight;
 
+            // All positions are proportional to the available screen area,
+            // so the layout scales on different phone sizes.
+            final compact = height < 680;
+
             return Stack(
+              clipBehavior: Clip.hardEdge,
               children: [
+                // 1. Raahi logo
                 Positioned(
-                  right: -100,
-                  top: height * 0.34,
-                  child: Container(
-                    width: 230,
-                    height: 180,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF45D6B9)
-                          .withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(100),
-                    ),
+                  top: height * (compact ? 0.105 : 0.115),
+                  left: width * 0.205,
+                  right: width * 0.205,
+                  height: height * (compact ? 0.205 : 0.225),
+                  child: Image.asset(
+                    logoAsset,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.center,
+                    errorBuilder: (_, __, ___) =>
+                        const Center(child: Icon(Icons.image_not_supported)),
                   ),
                 ),
 
+                // 2. Tagline
                 Positioned(
-                  left: -100,
-                  bottom: 0,
-                  child: Container(
-                    width: 230,
-                    height: 130,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF54CC38)
-                          .withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(100),
-                    ),
-                  ),
-                ),
-
-                Column(
-                  children: [
-                    const SizedBox(height: 20),
-
-                    // Raahi logo
-                    Image.asset(
-                      'assets/images/app_icon.png',
-                      height: height * 0.105,
-                      fit: BoxFit.contain,
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    const Text(
-                      'Your City. Your Ride. Your Way.',
+                  top: height * (compact ? 0.335 : 0.345),
+                  left: width * 0.055,
+                  right: width * 0.055,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: const Text(
+                      'Your Local & Intercity Travel Partner',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        fontStyle: FontStyle.italic,
-                        color: Color(0xFF073B3A),
+                        fontSize: 18,
+                        color: Color(0xFF555555),
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
+                  ),
+                ),
 
-                    Container(
-                      margin: const EdgeInsets.only(top: 14),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 22,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFD7F5EE),
-                        borderRadius: BorderRadius.circular(35),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.groups_rounded,
-                            color: Color(0xFF07836A),
-                            size: 25,
+                // 3. Launch cities
+                Positioned(
+                  top: height * (compact ? 0.395 : 0.405),
+                  left: width * 0.19,
+                  right: width * 0.19,
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _CityLabel('Ujjain'),
+                      _CityDivider(),
+                      _CityLabel('Indore'),
+                      _CityDivider(),
+                      _CityLabel('Dewas'),
+                    ],
+                  ),
+                ),
+
+                // 4. Faded temple and city illustration.
+                // This stays behind the car and the wave artwork.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: height * 0.385,
+                  height: height * 0.415,
+                  child: Opacity(
+                    opacity: 0.22,
+                    child: Image.asset(
+                      skylineAsset,
+                      fit: BoxFit.contain,
+                      alignment: Alignment.bottomCenter,
+                      errorBuilder: (_, __, ___) =>
+                          const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
+
+                // 5. Curved navy and teal ribbon waves.
+                // The painter is intentionally transparent outside the
+                // ribbons, leaving the button area white.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: height * 0.255,
+                  height: height * 0.335,
+                  child: const IgnorePointer(
+                    child: CustomPaint(
+                      painter: _WelcomeWavePainter(),
+                    ),
+                  ),
+                ),
+
+                // 6. White Raahi Dzire, layered over the skyline and waves.
+                Positioned(
+                  right: width * 0.50,
+                  bottom: height * 0.335,
+                  width: width * 0.47,
+                  height: height * 0.175,
+                  child: Image.asset(
+                    carAsset,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.bottomCenter,
+                    errorBuilder: (_, __, ___) =>
+                        const SizedBox.shrink(),
+                  ),
+                ),
+
+                // 7. Three onboarding page indicators.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: height * 0.245,
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _PageDot(active: true),
+                      _PageDot(),
+                      _PageDot(),
+                    ],
+                  ),
+                ),
+
+                // 8. Get Started button on a clean white area.
+                Positioned(
+                  left: width * 0.055,
+                  right: width * 0.055,
+                  bottom: height * 0.065,
+                  height: height * 0.075,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(36),
+                      onTap: () => _getStarted(context),
+                      child: Ink(
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              Color(0xFF08B69D),
+                              Color(0xFF079C88),
+                            ],
                           ),
-                          SizedBox(width: 10),
-                          Text(
-                            'Passenger App',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF073B3A),
+                          borderRadius: BorderRadius.circular(36),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Get Started',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // Dzire image
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                        ),
-                        child: Image.asset(
-                          'assets/images/raahi_dzire_car.png',
-                          width: double.infinity,
-                          fit: BoxFit.contain,
+                            SizedBox(width: 14),
+                            Icon(
+                              Icons.arrow_forward_rounded,
+                              color: Colors.white,
+                              size: 29,
+                            ),
+                          ],
                         ),
                       ),
                     ),
-
-                    // Service categories
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Row(
-                        children: [
-                          _ServiceItem(
-                            icon: Icons.directions_car_outlined,
-                            label: 'Local\nRides',
-                          ),
-                          _ServiceItem(
-                            icon: Icons.route_outlined,
-                            label: 'Outstation\nTrips',
-                          ),
-                          _ServiceItem(
-                            icon: Icons.temple_hindu_outlined,
-                            label: 'Religious\nTours',
-                          ),
-                          _ServiceItem(
-                            icon: Icons.business_center_outlined,
-                            label: 'Corporate\nTravel',
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 22),
-
-                    const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _Dot(active: true),
-                        _Dot(),
-                        _Dot(),
-                      ],
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    const _BottomWaves(),
-
-                    const SizedBox(height: 8),
-                  ],
+                  ),
                 ),
               ],
             );
@@ -190,145 +212,152 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
-class _ServiceItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
+class _CityLabel extends StatelessWidget {
+  final String city;
 
-  const _ServiceItem({
-    required this.icon,
-    required this.label,
-  });
+  const _CityLabel(this.city);
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Icon(
-            icon,
-            color: const Color(0xFF087B5B),
-            size: 31,
-          ),
-          const SizedBox(height: 7),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF172B35),
-              height: 1.25,
-            ),
-          ),
-        ],
+    return Text(
+      city,
+      style: const TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: Color(0xFF222222),
       ),
     );
   }
 }
 
-class _Dot extends StatelessWidget {
-  final bool active;
-
-  const _Dot({this.active = false});
+class _CityDivider extends StatelessWidget {
+  const _CityDivider();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 5),
-      width: 11,
-      height: 11,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: active
-            ? const Color(0xFF39C928)
-            : const Color(0xFFA7E5D9),
-      ),
+      width: 2,
+      height: 23,
+      color: SplashScreen.teal,
     );
   }
 }
 
-class _BottomWaves extends StatelessWidget {
-  const _BottomWaves();
+class _PageDot extends StatelessWidget {
+  final bool active;
+
+  const _PageDot({this.active = false});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 65,
-      width: double.infinity,
-      child: CustomPaint(
-        painter: _WavePainter(),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      width: active ? 12 : 11,
+      height: active ? 12 : 11,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: active ? SplashScreen.teal : const Color(0xFFC6D2DC),
       ),
     );
   }
 }
 
-class _WavePainter extends CustomPainter {
+class _WelcomeWavePainter extends CustomPainter {
+  const _WelcomeWavePainter();
+
   @override
   void paint(Canvas canvas, Size size) {
-    final green = Paint()
-      ..color = const Color(0xFF54CC38);
+    final tealPaint = Paint()
+      ..color = SplashScreen.teal
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
 
-    final teal = Paint()
-      ..color = const Color(0xFF08BDA8);
+    final navyPaint = Paint()
+      ..color = SplashScreen.navy
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
 
-    final darkTeal = Paint()
-      ..color = const Color(0xFF087E73);
-
-    Path greenPath = Path()
-      ..moveTo(0, 10)
-      ..quadraticBezierTo(
-        size.width * 0.28,
-        size.height * 0.75,
-        size.width * 0.55,
-        size.height * 0.75,
+    // Navy ribbon: a broad, smooth curve running from lower-left
+    // toward the upper-right.
+    final navyPath = Path()
+      ..moveTo(0, size.height * 0.54)
+      ..cubicTo(
+        size.width * 0.20,
+        size.height * 0.78,
+        size.width * 0.39,
+        size.height * 0.82,
+        size.width * 0.60,
+        size.height * 0.64,
       )
-      ..quadraticBezierTo(
+      ..cubicTo(
         size.width * 0.78,
-        size.height * 0.72,
+        size.height * 0.48,
+        size.width * 0.91,
+        size.height * 0.35,
         size.width,
+        size.height * 0.30,
+      )
+      ..lineTo(size.width, size.height * 0.53)
+      ..cubicTo(
+        size.width * 0.83,
+        size.height * 0.60,
+        size.width * 0.72,
+        size.height * 0.83,
+        size.width * 0.53,
+        size.height * 0.91,
+      )
+      ..cubicTo(
+        size.width * 0.31,
+        size.height * 1.02,
+        size.width * 0.13,
+        size.height * 0.83,
         0,
+        size.height * 0.76,
       )
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
       ..close();
 
-    Path tealPath = Path()
-      ..moveTo(0, 30)
-      ..quadraticBezierTo(
-        size.width * 0.35,
-        size.height * 1.1,
-        size.width * 0.65,
-        size.height * 0.65,
+    // Teal ribbon: a second curved band crossing in front of the navy.
+    final tealPath = Path()
+      ..moveTo(0, size.height * 0.68)
+      ..cubicTo(
+        size.width * 0.20,
+        size.height * 0.91,
+        size.width * 0.39,
+        size.height * 0.96,
+        size.width * 0.59,
+        size.height * 0.79,
       )
-      ..quadraticBezierTo(
-        size.width * 0.85,
-        size.height * 0.3,
+      ..cubicTo(
+        size.width * 0.78,
+        size.height * 0.63,
+        size.width * 0.91,
+        size.height * 0.48,
         size.width,
-        18,
+        size.height * 0.43,
       )
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
+      ..lineTo(size.width, size.height * 0.67)
+      ..cubicTo(
+        size.width * 0.82,
+        size.height * 0.75,
+        size.width * 0.71,
+        size.height * 0.96,
+        size.width * 0.52,
+        size.height,
+      )
+      ..cubicTo(
+        size.width * 0.31,
+        size.height * 1.08,
+        size.width * 0.13,
+        size.height * 0.96,
+        0,
+        size.height * 0.90,
+      )
       ..close();
 
-    Path darkPath = Path()
-      ..moveTo(0, 48)
-      ..quadraticBezierTo(
-        size.width * 0.5,
-        size.height * 1.2,
-        size.width,
-        35,
-      )
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
-      ..close();
-
-    canvas.drawPath(greenPath, green);
-    canvas.drawPath(tealPath, teal);
-    canvas.drawPath(darkPath, darkTeal);
+    canvas.drawPath(navyPath, navyPaint);
+    canvas.drawPath(tealPath, tealPaint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
-  }
+  bool shouldRepaint(covariant _WelcomeWavePainter oldDelegate) => false;
 }

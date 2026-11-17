@@ -264,6 +264,13 @@ class RideRoute(Base):
     bookings: Mapped[list["Booking"]] = relationship(
         back_populates="route"
     )
+    pickup_latitude: Mapped[float | None] = mapped_column(
+    Float, nullable=True
+    )
+
+    pickup_longitude: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
 
 # -------------------------
 # BOOKINGS TABLE

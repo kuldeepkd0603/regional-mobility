@@ -18,21 +18,28 @@ ENV/
 .coverage
 htmlcov/
 
-# Node.js
+# Node.js & Next.js
 node_modules/
 dist/
+build/
+.next/
+out/
 npm-debug.log*
 yarn-debug.log*
+yarn-error.log*
 pnpm-debug.log*
+*.tsbuildinfo
+.vercel/
 
 # Flutter and Dart
 .dart_tool/
 .packages
 .pub-cache/
 .pub/
-build/
 .flutter-plugins
 .flutter-plugins-dependencies
+mobile/**/build/
+mobile/**/.dart_tool/
 
 # Terraform
 .terraform/
@@ -49,8 +56,13 @@ override.tf.json
 
 # Editor and operating system files
 .idea/
+.vscode/
 .DS_Store
 Thumbs.db
+desktop.ini
 *.swp
+*.swo
 
+# Local secrets & credentials
 secrets/
+*.pem
